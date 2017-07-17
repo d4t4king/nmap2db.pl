@@ -1,0 +1,159 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use DBI;
+use Data::Dumper;
+use Getopt::Long;
+
+use Nmap::Parser 1.34;
+use Excel::Writer::XLSX;
+
+my ($input, $output, $verbose, $help, $quiet, $excel, $up, $masscan, $database);
+GetOptions(
+	'h|help'		=>	\$help,
+	'v|verbose+'	=>	\$verbose,
+	'q|quiet'		=>	\$quiet,
+	'i|input=s'		=>	\$input,
+	'o|output=s'	=>	\$output,
+	'e|excel'		=>	\$excel,
+	'u|up'			=>	\$up,
+	'm|masscan'		=>	\$masscan,
+);
+
+if (($verbose) and ($quiet)) { print "Can't be both verbose and quiet.  Pick one."; exit 1; }
+$masscan = 0 unless($masscan);
+$help = 0 unless($help);
+$verbose = 0 unless($verbose);
+$quiet = 0 unless($quiet);
+$excel = 0 unless ($excel);
+$up = 0 unless($up);
+
+if ($verbose) {
+	print <<EOS;
+
+#################
+#  Input file:			$input
+#  Database file:		$database
+#  Is masscan?:			$masscan
+#################
+EOS
+}
+
+if ($masscan) {
+	print "### NYI ###\n";
+} else {
+	my $nmap = new Nmap::Parser;
+	if (( -f $input ) and (! -d $input ) and (! -z $input )) {
+		$nmap->parsefile($input);
+		#print Dumper($nmap);
+		my $sess = $nmap->get_session();
+		my @nmap_hosts;
+		if ($up) { @nmap_hosts = $nmap->all_hosts('up'); }
+		else { @nmap_hosts = $nmap->all_hosts(); }
+		if ($excel) {
+			my $wb = Excel::Writer::XLSX->new($output);
+			my $ws_summary = $wb->add_worksheet('Summary');
+			my $ws_ports = $wb->add_worksheet('Port');
+
+			my @summary_header_row = ('IP', 'Hostname', 'OS Guess', 'Accuracy', 'Host Status', 'Open Ports', 'Start Time - Epoc', 'Start Date', 'End Time - Epoch', 'End Date', 'Duration', 'MAC Address', 'MAC Vendor', 'Scripts');
+			print Dumper(\@summary_header_row) if ($verbose);
+			$ws_summary->write_row('A1', \@summary_header_row);
+			my @ports_header_row = ('IP', 'Port Number', 'Protocol', 'Service', 'State', 'Reason', 'Scripts');
+			$ws_ports->write_row('A1', \@ports_header_row);
+			my $i = 2; my $j = 2;
+			foreach my $h ( @nmap_hosts ) {
+				my $os = $h->os_sig();
+				my $port_str;
+				my @tcpports = $h->tcp_open_ports();
+				my @udpports = $h->udp_open_ports();
+				if (scalar(@tcpports) > 0) {
+					print "\@tcpports defined\n" if (($verbose) and ($verbose > 2));
+					$port_str .= "T:".join("|", @tcpports);
+				} else {
+					print Dumper($h->{'ports'}) if (($verbose) and ($verbose > 2));
+					print "No open TCP ports found for host (".$h->ipv4_addr().")\n" if ($verbose);
+				}
+				if (scalar(@udpports) > 0) {
+					print "\@udpports defined\n" if (($verbose) and ($verbose > 2));
+					$port_str .= "|".join("|", @udpports);
+				} else {
+					print Dumper($h->{'ports'}) if (($verbose) and ($verbose > 2));
+					print "No open UDP ports found for host (".$h->ipv4_addr().")\n" if ($verbose);
+				}
+				if ((!defined($port_str)) or ($port_str eq '')) { $port_str = "No open ports found"; }
+				my $duration = $sess->finish_time() - $sess->start_time();
+				my $hostscripts;
+				my @hs = $h->hostscripts();
+				if (scalar(@hs) > 0) {
+					foreach my $hs ( @hs ) {
+						my $obj = $h->hostscripts($hs);
+						#print Dumper($obj);
+						$hostscripts .= "$hs=$obj->{'output'}\n";
+					}
+				}
+				if ($hostscripts) { $hostscripts =~ s/\,/\|/g; }
+				my @host_data_row = ( $h->ipv4_addr(), $h->hostname(), $os->name(), $os->name_accuracy(), $h->status(), $port_str, $sess->start_time(), $sess->start_str(), $sess->finish_time(), $sess->time_str(), $duration, $h->mac_addr(), $h->mac_vendor(), $hostscripts );
+				$ws_summary->write_row("A".$i++, \@host_data_row);
+				### port worksheet
+				next unless (scalar(@tcpports) > 0);
+				foreach my $p ( @tcpports ) {
+					#print "Port => $p\n";
+					my $svc = $h->tcp_service($p);
+					my $script_str;
+					my @ss = $svc->scripts();
+					if (scalar(@ss) > 0) {
+						foreach my $ss ( @ss ) {
+							my $obj = $svc->scripts($ss);
+							#print Dumper($obj);
+							$script_str .= "$ss=$obj->{'output'}\n";
+						}
+					}
+					my $proto;
+					if (($svc->proto() eq '') or ($svc->proto() eq 'unknown')) { $proto = "tcp"; } 
+					else { $proto = $svc->proto(); }
+					my @port_data_row = ( $h->ipv4_addr(), $svc->port(), $proto, $svc->name(), 'open', $svc->method(), $script_str);
+					$ws_ports->write_row("A".$j++, \@port_data_row);
+				}
+			}
+			$wb->close();
+		} else {
+			# (default output to csv)
+			open CSV, ">$output" or die "Couldn't open output file ($output): $!";
+			print CSV "IP,Hostname,OS Guess,Accuracy,Host Status,Open Ports,Start Time\n";
+			foreach my $h ( @nmap_hosts ) {
+				print Dumper($h) if (($verbose) and ($verbose >= 3));
+				my $os = $h->os_sig();
+				my $port_str;
+				my @tcpports = $h->tcp_open_ports();
+				my @udpports = $h->udp_open_ports();
+				if (scalar(@tcpports) > 0) {
+					print "\@tcpports defined\n" if (($verbose) and ($verbose > 2));
+					$port_str .= "T:".join("|", @tcpports);
+				} else {
+					print Dumper($h->{'ports'}) if (($verbose) and ($verbose > 2));
+					print "No open TCP ports found for host (".$h->ipv4_addr().")\n" if ($verbose);
+				}
+				if (scalar(@udpports) > 0) {
+					print "\@udpports defined\n" if (($verbose) and ($verbose > 2));
+					$port_str .= "|".join("|", @udpports);
+				} else {
+					print Dumper($h->{'ports'}) if (($verbose) and ($verbose > 2));
+					print "No open UDP ports found for host (".$h->ipv4_addr().")\n" if ($verbose);
+				}
+				$port_str = "No open ports found" unless ($port_str);
+				print CSV $h->ipv4_addr().",".$h->hostname().",".$os->name.",".$os->name_accuracy().",".$h->status().",".$port_str.",".$sess->start_str()."\n";
+			}
+			close CSV or die "There was a problem closing the CSV file: $! ";
+		}
+	} else {
+		if ( -z $input ) {
+			die "Input file is zero (0) bytes.";
+		} elsif ( -d $input ) {
+			die "Specified input is a directory.";
+		} elsif ( ! -f $input ) {
+			die "Specified input is not a file.";
+		}
+	}
+}
