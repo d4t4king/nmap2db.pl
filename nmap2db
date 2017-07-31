@@ -187,3 +187,34 @@ if ($masscan) {
 ###############################################################################
 ### Subs
 ###############################################################################
+
+sub usage {
+	print <<EoS;
+
+Convert nmap XML data to database format specified by command options.
+
+Usage:
+$0 -hvqmue -i <input_file> -o [output_file] -t [db_type] -s [db_host] -d [db_name] -u [db_user] -p [dp_pass]
+
+Where:
+-h|--help			Prints this message then exits.
+-v|--verbose			Increase output volume.
+-q|--quiet			Decrease output volume.
+-u|--up				Only report on hosts that are "up".
+-m|--masscan			Input file is from a masscan rather than nmap.
+-e|--excel			Create a Microsoft Excel 2010 and later compatible Excel file.
+-i|--input			Specify the full path to the input file.
+-o|--output			Specify the full path to the output file.
+-t|--type			Specify the database type.  Currently only accepts 'mysql' or 'MSSQL'.
+-s|--server			Specify the database server.
+-p|--port			Specify the port for the database server.  Defaults to 3306.
+-d|--database			Specify the name for the database.  Defaults to 'nmap_data'.
+-u|--user			Specify the username for the database.
+-p|--pass			Specify the password for the database.
+
+Note: Excel option on used with CSV output.
+Note: All database options only used with mysql or mssql output.
+
+EoS
+	exit 0;
+}
