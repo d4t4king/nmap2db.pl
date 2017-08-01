@@ -29,6 +29,7 @@ GetOptions(
 	'p|pass=s'		=>	\$dbpass,
 );
 
+my %to_bool = ( 0 => 'false', 1 => 'true' );
 $masscan = 0 unless($masscan);
 $help = 0 unless($help);
 $verbose = 0 unless($verbose);
@@ -36,25 +37,43 @@ $quiet = 0 unless($quiet);
 $excel = 0 unless ($excel);
 $up = 0 unless($up);
 
+my %table_sql = (
+	'nmap'			=> 'CREATE TABLE IF NOT EXISTS nmap (sid INT NOT NULL AUTO_INCREMENT, version VARCHAR(8), xmlversion VARCHAR(8), args VARCHAR(255), types VARCHAR(255), starttime DATETIME, startstr VARCHAR(255), endtime DATETIME, endstr VARCHAR(255), numservices INT, PRIMARY KEY (sid))',
+	'hosts'			=> 'CREATE TABLE IF NOT EXISTS hosts (sid INT NOT NULL, hid INT NOT NULL AUTO_INCREMENT, ip4 VARCHAR(16), ip4num VARCHAR(255), hostname VARCHAR(255), status VARCHAR(255), tcpcount INT, udpcount INT, mac VARCHAR(24), vendor VARCHAR(255), ip6 VARCHAR(64), distance INT, uptime VARCHAR(255), upstr VARCHAR(255), PRIMARY KEY(hid))',
+	'sequencing'	=> 'CREATE TABLE IF NOT EXISTS sequencing (hid INT NOT NULL, sid INT NOT NULL, tcpclass VARCHAR(255), tcpindex VARCHAR(255), tcpvalues VARCHAR(255), ipclass VARCHAR(255), ipvalues VARCHAR(255), tcptclass VARCHAR(255), tcptvalues VARCHAR(255))',
+	'port'			=> 'CREATE TABLE IF NOT EXISTS ports (hid INT NOT NULL, sid INT NOT NULL, port INT, type VARCHAR(255), state VARCHAR(255), name VARCHAR(255), tunnel VARCHAR(255), product VARCHAR(255), version VARCHAR(255), extra VARCHAR(255), confidence INT, method VARCHAR(255), proto VARCHAR(255), owner VARCHAR(255), rpcnum VARCHAR(255), fingerprint TEXT)',
+	'os'			=> 'CREATE TABLE IF NOT EXISTS os (hid INT NOT NULL, sid INT NOT NULL, name VARCHAR(255), family VARCHAR(255), generation VARCHAR(255), type VARCHAR(255), vendor VARCHAR(255), accuracy INT)',
+);
+
 if ($help) { &usage(); }
 
 if (($verbose) and ($quiet)) { print "Can't be both verbose and quiet.  Pick one."; exit 1; }
 
-if (($dbtype) and (($dbtype ne 'mysql') or ($dbtype ne 'mssql'))) {
-	print "Can only accept database types of mysql or MSSQL.\n";
+if (($dbtype) and ($dbtype !~ /(?:mysql|mssql)/)) {
+	print "Can only accept database types of mysql or mssql.\n";
 	exit 1;
 }
 
-$dbport = 3306 unless($dbport);
+if ($dbtype) {
+	if ($dbtype eq 'mysql') {
+		$dbport = 3306 unless($dbport);
+	} elsif ($dbtype eq 'mssql') {
+		$dbport = 1433 unless($dbport);
+	} else {
+		die "Unrecognized DB type!";
+	}
+	$dbname = 'nmap_data' unless($dbname);
+}
 
 if ($verbose) {
 	print <<EOS;
 
 #################
 #  Input file:			$input
-#  Database file:		$database
-#  Is masscan?:			$masscan
+#  Database file:		$dbname
+#  Is masscan?:			$to_bool{$masscan}
 #################
+
 EOS
 }
 
@@ -63,127 +82,152 @@ if ($masscan) {
 	exit 1;
 } else {
 	my $nmap = new Nmap::Parser;
-	if (( -f $input ) and (! -d $input ) and (! -z $input )) {
-		$nmap->parsefile($input);
-		#print Dumper($nmap);
-		my $sess = $nmap->get_session();
-		my @nmap_hosts;
-		if ($up) { @nmap_hosts = $nmap->all_hosts('up'); }
-		else { @nmap_hosts = $nmap->all_hosts(); }
-		if ($excel) {
-			my $wb = Excel::Writer::XLSX->new($output);
-			my $ws_summary = $wb->add_worksheet('Summary');
-			my $ws_ports = $wb->add_worksheet('Port');
-
-			my @summary_header_row = ('IP', 'Hostname', 'OS Guess', 'Accuracy', 'Host Status', 'Open Ports', 'Start Time - Epoc', 'Start Date', 'End Time - Epoch', 'End Date', 'Duration', 'MAC Address', 'MAC Vendor', 'Scripts');
-			print Dumper(\@summary_header_row) if ($verbose);
-			$ws_summary->write_row('A1', \@summary_header_row);
-			my @ports_header_row = ('IP', 'Port Number', 'Protocol', 'Service', 'State', 'Reason', 'Scripts');
-			$ws_ports->write_row('A1', \@ports_header_row);
-			my $i = 2; my $j = 2;
-			foreach my $h ( @nmap_hosts ) {
-				my $os = $h->os_sig();
-				my $port_str;
-				my @tcpports = $h->tcp_open_ports();
-				my @udpports = $h->udp_open_ports();
-				if (scalar(@tcpports) > 0) {
-					print "\@tcpports defined\n" if (($verbose) and ($verbose > 2));
-					$port_str .= "T:".join("|", @tcpports);
-				} else {
-					print Dumper($h->{'ports'}) if (($verbose) and ($verbose > 2));
-					print "No open TCP ports found for host (".$h->ipv4_addr().")\n" if ($verbose);
-				}
-				if (scalar(@udpports) > 0) {
-					print "\@udpports defined\n" if (($verbose) and ($verbose > 2));
-					$port_str .= "|".join("|", @udpports);
-				} else {
-					print Dumper($h->{'ports'}) if (($verbose) and ($verbose > 2));
-					print "No open UDP ports found for host (".$h->ipv4_addr().")\n" if ($verbose);
-				}
-				if ((!defined($port_str)) or ($port_str eq '')) { $port_str = "No open ports found"; }
-				my $duration = $sess->finish_time() - $sess->start_time();
-				my $hostscripts;
-				my @hs = $h->hostscripts();
-				if (scalar(@hs) > 0) {
-					foreach my $hs ( @hs ) {
-						my $obj = $h->hostscripts($hs);
-						#print Dumper($obj);
-						$hostscripts .= "$hs=$obj->{'output'}\n";
+	if (defined($input)) {
+		if (( -f $input ) and (! -d $input ) and (! -z $input )) {
+			$nmap->parsefile($input);
+			#print Dumper($nmap);
+			my $sess = $nmap->get_session();
+			my @nmap_hosts;
+			if ($up) { @nmap_hosts = $nmap->all_hosts('up'); }
+			else { @nmap_hosts = $nmap->all_hosts(); }
+			if ($excel) {
+				my $wb = Excel::Writer::XLSX->new($output);
+				my $ws_summary = $wb->add_worksheet('Summary');
+				my $ws_ports = $wb->add_worksheet('Port');
+	
+				my @summary_header_row = ('IP', 'Hostname', 'OS Guess', 'Accuracy', 'Host Status', 'Open Ports', 'Start Time - Epoc', 'Start Date', 'End Time - Epoch', 'End Date', 'Duration', 'MAC Address', 'MAC Vendor', 'Scripts');
+				print Dumper(\@summary_header_row) if ($verbose);
+				$ws_summary->write_row('A1', \@summary_header_row);
+				my @ports_header_row = ('IP', 'Port Number', 'Protocol', 'Service', 'State', 'Reason', 'Scripts');
+				$ws_ports->write_row('A1', \@ports_header_row);
+				my $i = 2; my $j = 2;
+				foreach my $h ( @nmap_hosts ) {
+					my $os = $h->os_sig();
+					my $port_str;
+					my @tcpports = $h->tcp_open_ports();
+					my @udpports = $h->udp_open_ports();
+					if (scalar(@tcpports) > 0) {
+						print "\@tcpports defined\n" if (($verbose) and ($verbose > 2));
+						$port_str .= "T:".join("|", @tcpports);
+					} else {
+						print Dumper($h->{'ports'}) if (($verbose) and ($verbose > 2));
+						print "No open TCP ports found for host (".$h->ipv4_addr().")\n" if ($verbose);
 					}
-				}
-				if ($hostscripts) { $hostscripts =~ s/\,/\|/g; }
-				my @host_data_row = ( $h->ipv4_addr(), $h->hostname(), $os->name(), $os->name_accuracy(), $h->status(), $port_str, $sess->start_time(), $sess->start_str(), $sess->finish_time(), $sess->time_str(), $duration, $h->mac_addr(), $h->mac_vendor(), $hostscripts );
-				$ws_summary->write_row("A".$i++, \@host_data_row);
-				### port worksheet
-				next unless (scalar(@tcpports) > 0);
-				foreach my $p ( @tcpports ) {
-					#print "Port => $p\n";
-					my $svc = $h->tcp_service($p);
-					my $script_str;
-					my @ss = $svc->scripts();
-					if (scalar(@ss) > 0) {
-						foreach my $ss ( @ss ) {
-							my $obj = $svc->scripts($ss);
+					if (scalar(@udpports) > 0) {
+						print "\@udpports defined\n" if (($verbose) and ($verbose > 2));
+						$port_str .= "|".join("|", @udpports);
+					} else {
+						print Dumper($h->{'ports'}) if (($verbose) and ($verbose > 2));
+						print "No open UDP ports found for host (".$h->ipv4_addr().")\n" if ($verbose);
+					}
+					if ((!defined($port_str)) or ($port_str eq '')) { $port_str = "No open ports found"; }
+					my $duration = $sess->finish_time() - $sess->start_time();
+					my $hostscripts;
+					my @hs = $h->hostscripts();
+					if (scalar(@hs) > 0) {
+						foreach my $hs ( @hs ) {
+							my $obj = $h->hostscripts($hs);
 							#print Dumper($obj);
-							$script_str .= "$ss=$obj->{'output'}\n";
+							$hostscripts .= "$hs=$obj->{'output'}\n";
 						}
 					}
-					my $proto;
-					if (($svc->proto() eq '') or ($svc->proto() eq 'unknown')) { $proto = "tcp"; } 
-					else { $proto = $svc->proto(); }
-					my @port_data_row = ( $h->ipv4_addr(), $svc->port(), $proto, $svc->name(), 'open', $svc->method(), $script_str);
-					$ws_ports->write_row("A".$j++, \@port_data_row);
+					if ($hostscripts) { $hostscripts =~ s/\,/\|/g; }
+					my @host_data_row = ( $h->ipv4_addr(), $h->hostname(), $os->name(), $os->name_accuracy(), $h->status(), $port_str, $sess->start_time(), $sess->start_str(), $sess->finish_time(), $sess->time_str(), $duration, $h->mac_addr(), $h->mac_vendor(), $hostscripts );
+					$ws_summary->write_row("A".$i++, \@host_data_row);
+					### port worksheet
+					next unless (scalar(@tcpports) > 0);
+					foreach my $p ( @tcpports ) {
+						#print "Port => $p\n";
+						my $svc = $h->tcp_service($p);
+						my $script_str;
+						my @ss = $svc->scripts();
+						if (scalar(@ss) > 0) {
+							foreach my $ss ( @ss ) {
+								my $obj = $svc->scripts($ss);
+								#print Dumper($obj);
+								$script_str .= "$ss=$obj->{'output'}\n";
+							}
+						}
+						my $proto;
+						if (($svc->proto() eq '') or ($svc->proto() eq 'unknown')) { $proto = "tcp"; } 
+						else { $proto = $svc->proto(); }
+						my @port_data_row = ( $h->ipv4_addr(), $svc->port(), $proto, $svc->name(), 'open', $svc->method(), $script_str);
+						$ws_ports->write_row("A".$j++, \@port_data_row);
+					}
 				}
+				$wb->close();
+			} elsif (($dbtype) and ($dbtype eq 'mysql')) {
+				# check the database exsists
+				#my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+				my $dsn = "DBI:mysql:host=$dbhost:port=$dbport";
+				my $dbh; my $rtv = 0; my $db_found = 0;
+				eval { $dbh = DBI->connect($dsn, $dbuser, $dbpass); };
+				if (($verbose) and ($verbose > 2)) { print "|\$\@|"; print Dumper($@); print "|\n"; }
+				my $sth = $dbh->prepare("SHOW DATABASES;");
+				$sth->execute();
+				while (my $row = $sth->fetchrow_array()) {
+					if (($verbose) and ($verbose > 2)) { print "|\$row|"; print Dumper($row); print "|\n"; }
+					if ($row eq $dbname) { $db_found = 1; last; }
+				}
+				$sth->finish();
+				if ($db_found) {
+					print "Database found.\n" if ($verbose);
+				} else {
+					print "Database not found!  Must create.\n" if ($verbose);
+					$rtv = $dbh->do("CREATE DATABASE $dbname;");
+					print "CREATE DATABASE RTV: $rtv\n" if ($verbose);
+				}
+				# check if the tables exist (?)
+				# blindly create them if they don't exist
+				foreach my $tbl ( sort keys %table_sql ) {
+					my $rtv = &create_table($tbl);
+					print "CREATE TABLE ($tbl) RTV: $rtv\n";
+				}
+
+				$dbh->disconnect();
+			} else {
+				# (default output to csv)
+				open CSV, ">$output" or die "Couldn't open output file ($output): $!";
+				print CSV "IP,Hostname,OS Guess,Accuracy,Host Status,Open Ports,Start Time\n";
+				foreach my $h ( @nmap_hosts ) {
+					print Dumper($h) if (($verbose) and ($verbose >= 3));
+					my $os = $h->os_sig();
+					my $port_str;
+					my @tcpports = $h->tcp_open_ports();
+					my @udpports = $h->udp_open_ports();
+					if (scalar(@tcpports) > 0) {
+						print "\@tcpports defined\n" if (($verbose) and ($verbose > 2));
+						$port_str .= "T:".join("|", @tcpports);
+					} else {
+						print Dumper($h->{'ports'}) if (($verbose) and ($verbose > 2));
+						print "No open TCP ports found for host (".$h->ipv4_addr().")\n" if ($verbose);
+					}
+					if (scalar(@udpports) > 0) {
+						print "\@udpports defined\n" if (($verbose) and ($verbose > 2));
+						$port_str .= "|".join("|", @udpports);
+					} else {
+						print Dumper($h->{'ports'}) if (($verbose) and ($verbose > 2));
+						print "No open UDP ports found for host (".$h->ipv4_addr().")\n" if ($verbose);
+					}
+					$port_str = "No open ports found" unless ($port_str);
+					print CSV $h->ipv4_addr().",".$h->hostname().",".$os->name.",".$os->name_accuracy().",".$h->status().",".$port_str.",".$sess->start_str()."\n";
+				}
+				close CSV or die "There was a problem closing the CSV file: $! ";
 			}
-			$wb->close();
-		} elsif (($dbtype) and ($dbtype eq 'mysql')) {
-			my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
-			my $dbh = DBI->connect($dsn, $dbuser, $dbpass);
-			# check if the database exsists
-			my $drh = DBI->install_driver('mysql');
-			my @dbs = $drh->func("$dbhost:$dbport", '_ListDBs');
-			print Dumper(\@dbs);
-			# check if the tables exist
 		} else {
-			# (default output to csv)
-			open CSV, ">$output" or die "Couldn't open output file ($output): $!";
-			print CSV "IP,Hostname,OS Guess,Accuracy,Host Status,Open Ports,Start Time\n";
-			foreach my $h ( @nmap_hosts ) {
-				print Dumper($h) if (($verbose) and ($verbose >= 3));
-				my $os = $h->os_sig();
-				my $port_str;
-				my @tcpports = $h->tcp_open_ports();
-				my @udpports = $h->udp_open_ports();
-				if (scalar(@tcpports) > 0) {
-					print "\@tcpports defined\n" if (($verbose) and ($verbose > 2));
-					$port_str .= "T:".join("|", @tcpports);
-				} else {
-					print Dumper($h->{'ports'}) if (($verbose) and ($verbose > 2));
-					print "No open TCP ports found for host (".$h->ipv4_addr().")\n" if ($verbose);
-				}
-				if (scalar(@udpports) > 0) {
-					print "\@udpports defined\n" if (($verbose) and ($verbose > 2));
-					$port_str .= "|".join("|", @udpports);
-				} else {
-					print Dumper($h->{'ports'}) if (($verbose) and ($verbose > 2));
-					print "No open UDP ports found for host (".$h->ipv4_addr().")\n" if ($verbose);
-				}
-				$port_str = "No open ports found" unless ($port_str);
-				print CSV $h->ipv4_addr().",".$h->hostname().",".$os->name.",".$os->name_accuracy().",".$h->status().",".$port_str.",".$sess->start_str()."\n";
+			if ( -z $input ) {
+				die "Input file is zero (0) bytes.";
+			} elsif ( -d $input ) {
+				die "Specified input is a directory.";
+			} elsif ( ! -f $input ) {
+				die "Specified input is not a file.";
 			}
-			close CSV or die "There was a problem closing the CSV file: $! ";
 		}
 	} else {
-		if ( -z $input ) {
-			die "Input file is zero (0) bytes.";
-		} elsif ( -d $input ) {
-			die "Specified input is a directory.";
-		} elsif ( ! -f $input ) {
-			die "Specified input is not a file.";
-		}
+		print "You must specify an input file!\n";
+		&usage();
 	}
 }
-
 ###############################################################################
 ### Subs
 ###############################################################################
@@ -212,9 +256,66 @@ Where:
 -u|--user			Specify the username for the database.
 -p|--pass			Specify the password for the database.
 
-Note: Excel option on used with CSV output.
+Note: Excel option only used with CSV output.
 Note: All database options only used with mysql or mssql output.
 
 EoS
 	exit 0;
 }
+
+sub create_table {
+	# database connection paramters should be accessible from here!
+	my $table_name = shift;
+	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
+	my $rtv = $dbh->do($table_sql{$table_name}) or die $DBI::stderr;
+	$dbh->disconnect() or die $DBI::stderr;
+	print "create_table::RTV: $rtv\n" if ($verbose);
+	return $rtv;
+}
+
+sub insert_nmap_record {
+	my $data_ref = shift;
+	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+    my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
+	my $rtv = $dbh->do("INSERT INTO nmap (version,xmlversion,args,types,starttime,startstr,endtime,endstr,numservices) VALUES ($data_ref->{'version'},$data_ref->{'xmlversion'}, $data_ref->{'args'}, $data_ref->{'types'}, $data_ref->{'starttime'}, $data_ref->{'startstr'}, $data_ref->{'endtime'}, $data_ref->{'endstr'}, $data_ref->{'numservices'})");
+	print "insert_nmap_record::RTV: $rtv\n" if ($verbose);
+	return $rtv;
+}
+
+sub insert_host_record {
+	my $data_ref = shift;
+	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+    my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
+	my $rtv = $dbh->do("INSERT INTO hosts (sid,ip4,ip4num,hostname,status,tcpcount,udpcount,mac,vendor,ip6,distance,uptime,upstr) VALUES ($data_ref->{'sid'}, $data_ref->{'ip4'}, $data_ref->{'ip4num'}, $data_ref->{'hostname'}, $data_ref->{'status'}, $data_ref->{'tcpcount'}, $data_ref->{'udpcount'}, $data_ref->{'mac'}, $data_ref->{'vendor'}, $data_ref->{'ip6'}, $data_ref->{'distance'}, $data_ref->{'distance'}, $data_ref->{'uptime'}, $data_ref->{'upstr'})");
+	print "insert_host_record::RTV: $rtv\n" if ($verbose);
+	return $rtv;
+}
+
+sub insert_seq_record {
+	my $data_ref = shift;
+	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+    my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
+	my $rtv = $dbh->do("INSERT INTO sequencing (hid,sid,tcpclass,tcpindex,tcpvalues,ipclass,ipvalues,tcptclass,tcptvalues) VALUES ($data_ref->{'hid'}, $data_ref->{'sed'}, $data_ref->{'tcpclass'}, $data_ref->{'tcpindex'}, $data_ref->{'tcpvalues'}, $data_ref->{'ipclass'}, $data_ref->{'ipvalues'}, $data_ref->{'tcptclass'}. $data_ref->{'tcptvalues'})");
+	print "insert_seq_record::RTV: $rtv\n" if ($verbose);
+	return $rtv;
+}
+
+sub insert_ports_record {
+	my $data_ref = shift;
+	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+    my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
+	my $rtv = $dbh->do("INSERT INTO ports (hid,sid,port,type,state,name,tunnel,product,version,extra,confidence,method,proto,owner,rpcnum,fingerprint) VALUES ($data_ref->{'hid'}, $data_ref->{'sid'}. $data_ref->{'port'}, $data_ref->{'type'}, $data_ref->{'state'}, $data_ref->{'name'}, $data_ref->{'tunnel'}, $data_ref->{'product'}, $data_ref->{'version'}, $data_ref->{'extra'}, $data_ref->{'confidence'}, $data_ref->{'method'}, $data_ref->{'proto'}, $data_ref->{'owner'}, $data_ref->{'rpcnum'}, $data_ref->{'fingerprint'})");
+	print "insert_ports_record::RTV: $rtv\n" if ($verbose);
+	return $rtv;
+}
+
+sub insert_os_record {
+	my $data_ref = shift;
+	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+    my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
+	my $rtv = $dbh->do("INSERT INTO os (hid,sid,name,family,generation,type,vendor,accuracy) VALUES ($data_ref->{'hid'}, $data_ref->{'sid'}, $data_ref->{'name'}, $data_ref->{'family'}, $data_ref->{'generation'}, $data_ref->{'type'}, $data_ref->{'vendor'}, $data_ref->{'accuracy'})");
+	print "insert_os_record::RTV: $rtv\n" if ($verbose);
+	return $rtv;
+}
+
