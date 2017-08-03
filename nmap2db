@@ -245,6 +245,56 @@ if ($masscan) {
 							# got a host id
 							print "Host ID exists: $hid\n";
 						}
+						### check for a sew record with thie scan id and 
+						### tcpsequence_class, tcpsequence_index, tcpsequence_values
+						if (&record_exists($hid, $sid, 'sequencing', $host->tcpsequence_class())) {
+							print "sequencing record exists for scan and host.  skipping....\n" if ($verbose);
+						} else {
+							my %params = (
+								'hid'					=>	$hid,
+								'sid'					=>	$sid,
+								'tcpsequence_class'		=>	$host->tcpsequence_class(),
+								'tcpsequence_index'		=>	$host->tcpsequence_index(),
+								'tcpsequence_values'	=>	$host->tcpsequence_values(),
+								'ipidsequence_class'	=>	$host->ipidsequence_class(),
+								'ipidsequence_values'	=>	$host->ipidsequence_values(),
+								'tcptsequence_class'	=>	$host->tcptsequence_class(),
+								'tcptsequence_values'	=>	$host->tcptsequence_values(),
+							);
+							my $rtv = &insert_seq_record(\%params);
+							print "insert_seq_record::RTV: $rtv\n" if ($verbose);
+						}
+						my $pc = 0;
+						if (defined($host->tcp_open_ports())) { $pc = scalar(@{$host->tcp_open_ports()}); }
+						if ( $pc > 0) {
+							my @pnums = $host->tcp_open_ports();
+							foreach my $pnum ( sort @pnums ) {
+								my $port_obj = $host->tcp_service($pnum);
+								if ($verbose) {
+									print Dumper($port_obj);
+								}
+								my %params = (
+									'hid'				=>	$hid,
+									'sid'				=>	$sid,
+									'port_num'			=>	$pnum,
+									''					=>	'',				### This was in the ruby version.  Not sure why or if it's needed here.
+									'state'				=>	'open',			# we're only querying the host obj for open ports
+									'service_name'		=>	$port_obj->name(),
+									'service_tunnel'	=>	$port_obj->tunnel(),
+									'product'			=>	$port_obj->product(),
+									'version'			=>	$port_obj->version(),
+									'extra'				=>	$port_obj->extra(),
+									'confidence'		=>	$port_obj->confidence(),
+									'method'			=>	$port_obj->method(),
+									'protocol'			=>	$port_obj->proto(),
+									'owner'				=>	$port_obj->owner(),
+									'rpcnum'			=>	$port_obj->rpcnum(),
+									'fingerprint'		=>	$port_obj->fingerprint(),
+								);
+								my $rtv = &insert_ports_record(\%params);
+								print "insert_ports_record::RTV: $rtv\n" if ($verbose);
+							}
+						}
 					}
 				}
 			### csv
@@ -374,7 +424,7 @@ sub insert_seq_record {
 	my $data_ref = shift;
 	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
-	my $rtv = $dbh->do("INSERT INTO sequencing (hid,sid,tcpclass,tcpindex,tcpvalues,ipclass,ipvalues,tcptclass,tcptvalues) VALUES ($data_ref->{'hid'}, $data_ref->{'sed'}, $data_ref->{'tcpclass'}, $data_ref->{'tcpindex'}, $data_ref->{'tcpvalues'}, $data_ref->{'ipclass'}, $data_ref->{'ipvalues'}, $data_ref->{'tcptclass'}. $data_ref->{'tcptvalues'})");
+	my $rtv = $dbh->do("INSERT INTO sequencing (hid,sid,tcpclass,tcpindex,tcpvalues,ipclass,ipvalues,tcptclass,tcptvalues) VALUES ('$data_ref->{'hid'}', '$data_ref->{'sed'}', '$data_ref->{'tcpclass'}', '$data_ref->{'tcpindex'}', '$data_ref->{'tcpvalues'}', '$data_ref->{'ipclass'}', '$data_ref->{'ipvalues'}', '$data_ref->{'tcptclass'}', '$data_ref->{'tcptvalues'}')");
 	print "insert_seq_record::RTV: $rtv\n" if ($verbose);
 	return $rtv;
 }
@@ -432,5 +482,27 @@ sub check_host_record {
 	}
 	$sth->finish() or die $DBI::stderr;
 	$dbh->disconnect() or die $DBI::stderr;
+	return $retval;
+}
+
+sub record_exists {
+	my $hid = shift; 
+	my $sid = shift;
+	my $rec_type = shift;
+	my $extra = shift;
+	my $retval = 0;
+	my %sql = (
+		'sequencing'	=>	"SELECT hid FROM sequencing WHERE hid='$hid' AND sid='$sid' AND tcpclass='$extra'",
+		'os'			=>	"SELECT hid FROM os WHERE hid='$hid' AND sid='$sid' AND name='$extra'",
+	);
+	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
+	my $sth = $dbh->prepare($sql{$rec_type}) or die $DBI::stderr;
+	$sth->execute() or die $DBI::stderr;
+	while (my @row = $sth->fetchrow_array()) {
+		$retval = 1 if (@row);
+	}
+	$sth->finish or die $DBI::stderr;
+	$dbh->disconnect or die $DBI::stderr;
 	return $retval;
 }
