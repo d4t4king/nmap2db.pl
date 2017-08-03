@@ -90,6 +90,8 @@ if ($masscan) {
 			my @nmap_hosts;
 			if ($up) { @nmap_hosts = $nmap->all_hosts('up'); }
 			else { @nmap_hosts = $nmap->all_hosts(); }
+			### start format parsing
+			### excel
 			if ($excel) {
 				my $wb = Excel::Writer::XLSX->new($output);
 				my $ws_summary = $wb->add_worksheet('Summary');
@@ -156,6 +158,7 @@ if ($masscan) {
 					}
 				}
 				$wb->close();
+			### mysql
 			} elsif (($dbtype) and ($dbtype eq 'mysql')) {
 				# check the database exsists
 				#my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
@@ -183,8 +186,68 @@ if ($masscan) {
 					my $rtv = &create_table($tbl);
 					print "CREATE TABLE ($tbl) RTV: $rtv\n";
 				}
-
 				$dbh->disconnect();
+				### process the nmap data
+				# check if a session record already exists
+				my $sid = &check_scan_record($sess->scan_args(), $sess->start_str(), $sess->Time_str());
+				print "&check_scan_record(".$sess->scan_args().", ".$sess->start_str().", ".$sess->time_str().");\n" if ($verbose);
+				print "SID: $sid\n" if ($verbose);
+				if (($sid =~ /^\d+$/) and ($sid > 0)) {
+					print "Scan record already exists.  SID = $sid\n" unless ($quiet);
+				} else {	# add new session
+					my %params = (
+						'version'		=> $sess->nmap_version(),
+						'xmlversion'	=> $sess->xml_version(),
+						'args'			=> $sess->scan_args(),
+						'types'			=> $sess->scan_types(),
+						'starttime'		=> $sess->start_time(),
+						'startstr'		=> $sess->start_str(),
+						'endtime'		=> $sess->finish_time(),
+						'endstr'		=> $sess->time_str(),
+						'numservices'	=> $sess->numservices(),
+					);
+					print Dumper(\%params);
+					my $rtv = &insert_nmap_record(\%params);
+					$sid = &check_scan_record($sess->scan_args(), $sess->start_str(), $sess->time_str());
+					print "SID after insert: $sid\n";
+				}
+				if (scalar(@nmap_hosts) == 0) {
+					print "There are no hosts in this scan." unless ($quiet);
+				} else {	# add new hosts
+					foreach my $host ( @nmap_hosts ) {
+						my $hid = 0;
+						# check for a host record with this scan ID (sid) and
+						# the same ip and hostname
+						print "\&check_host_record($sid, ".$host->ipv4_addr().", ".$host->hostname().")\n" if ($verbose);
+						$hid = &check_host_record($sid, $host->ipv4_addr(), $host->hostname());
+						print "HID = $hid\n" if ($verbose);
+						if ((!defined($hid)) or ($hid == 0)) {
+							print "Host record not found, creating...\n" if ($verbose);
+							print Dumper($host) if ($verbose);
+							my %params = (
+								'sid'				=>	$sid,
+								'ip4'				=>	$host->ipv4_addr(),
+								'ip4num'			=>	'[ip4num]',
+								'hostname'			=>	$host->hostname(),
+								'status'			=>	$host->status(),
+								'tcpcount'			=>	$host->tcp_port_count(),
+								'udpcount'			=>	$host->udp_port_count(),
+								'mac_addr'			=>	$host->mac_addr(),
+								'mac_vendor'		=>	$host->mac_vendor(),
+								'ipv6_addr'			=>	$host->ipv6_addr(),
+								'distance'			=>	$host->distance(),
+								'uptime_secs'		=>	$host->uptime_seconds(),
+								'uptime_lastboot'	=>	$host->uptime_lastboot(),
+							);
+							my $rtv = &insert_host_record(\%params);
+							print "insert_host_record::RTV: $rtv\n" if ($verbose);
+						} else {
+							# got a host id
+							print "Host ID exists: $hid\n";
+						}
+					}
+				}
+			### csv
 			} else {
 				# (default output to csv)
 				open CSV, ">$output" or die "Couldn't open output file ($output): $!";
@@ -269,6 +332,9 @@ sub create_table {
 	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
 	my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
 	my $rtv = $dbh->do($table_sql{$table_name}) or die $DBI::stderr;
+	if ($table_name =~ /^(?:hosts|nmap)$/) {
+		$rtv = $dbh->do("ALTER TABLE $table_name AUTO_INCREMENT = 1;") or die $DBI::stderr;
+	}
 	$dbh->disconnect() or die $DBI::stderr;
 	print "create_table::RTV: $rtv\n" if ($verbose);
 	return $rtv;
@@ -278,16 +344,28 @@ sub insert_nmap_record {
 	my $data_ref = shift;
 	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
-	my $rtv = $dbh->do("INSERT INTO nmap (version,xmlversion,args,types,starttime,startstr,endtime,endstr,numservices) VALUES ($data_ref->{'version'},$data_ref->{'xmlversion'}, $data_ref->{'args'}, $data_ref->{'types'}, $data_ref->{'starttime'}, $data_ref->{'startstr'}, $data_ref->{'endtime'}, $data_ref->{'endstr'}, $data_ref->{'numservices'})");
+	my $rtv = $dbh->do("INSERT INTO nmap (version,xmlversion,args,types,starttime,startstr,endtime,endstr,numservices) VALUES ('$data_ref->{'version'}','$data_ref->{'xmlversion'}','$data_ref->{'args'}', '$data_ref->{'types'}', '$data_ref->{'starttime'}', '$data_ref->{'startstr'}', '$data_ref->{'endtime'}', '$data_ref->{'endstr'}', '$data_ref->{'numservices'}')");
 	print "insert_nmap_record::RTV: $rtv\n" if ($verbose);
 	return $rtv;
 }
 
 sub insert_host_record {
 	my $data_ref = shift;
+	foreach my $key ( sort keys %{$data_ref} ) { 
+		if ((!defined($data_ref->{$key})) or ($data_ref->{$key} eq '')) { 
+			if ($key eq 'hostname') {
+				$data_ref->{$key} = 'UNRESOLVED';
+			} else {
+				$data_ref->{$key} = 'NULL'; 
+			}
+		}
+	}
 	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
-	my $rtv = $dbh->do("INSERT INTO hosts (sid,ip4,ip4num,hostname,status,tcpcount,udpcount,mac,vendor,ip6,distance,uptime,upstr) VALUES ($data_ref->{'sid'}, $data_ref->{'ip4'}, $data_ref->{'ip4num'}, $data_ref->{'hostname'}, $data_ref->{'status'}, $data_ref->{'tcpcount'}, $data_ref->{'udpcount'}, $data_ref->{'mac'}, $data_ref->{'vendor'}, $data_ref->{'ip6'}, $data_ref->{'distance'}, $data_ref->{'distance'}, $data_ref->{'uptime'}, $data_ref->{'upstr'})");
+    print Dumper($data_ref) if ($verbose);
+    my $sql = "INSERT INTO hosts (sid,ip4,ip4num,hostname,status,tcpcount,udpcount,mac,vendor,ip6,distance,uptime,upstr) VALUES ('$data_ref->{'sid'}','$data_ref->{'ip4'}','[ip4num]','$data_ref->{'hostname'}','$data_ref->{'status'}','$data_ref->{'tcpcount'}','$data_ref->{'udpcount'}','$data_ref->{'mac'}','$data_ref->{'vendor'}','$data_ref->{'ip6'}','$data_ref->{'distance'}','$data_ref->{'uptime'}','$data_ref->{'upstr'}')";
+    print "insert_)host_record::SQL: $sql\n" if ($verbose);
+	my $rtv = $dbh->do("$sql");
 	print "insert_host_record::RTV: $rtv\n" if ($verbose);
 	return $rtv;
 }
@@ -319,3 +397,40 @@ sub insert_os_record {
 	return $rtv;
 }
 
+sub check_scan_record {
+	my $args_str = shift;
+	my $startstr = shift;
+	my $endstr = shift;
+	my $retval = 0;
+	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
+	my $sql = "SELECT sid FROM nmap WHERE args='$args_str' AND startstr='$startstr' AND endstr='$endstr'";
+	print "SQL: $sql\n" if ($verbose);
+	my $sth = $dbh->prepare("$sql") or die $DBI::stderr;
+	my $rtv = $sth->execute();
+	print "check_scan_record::RTV:$rtv\n" if (($verbose) and ($verbose > 1));
+	while (my @row = $sth->fetchrow_array()) {
+		$retval = $row[0];
+	}
+	$sth->finish() or die $DBI::stderr;
+	$dbh->disconnect or die $DBI::stderr;
+	return $retval;
+}
+
+sub check_host_record {
+	my $sid = shift;
+	my $ip4 = shift;
+	my $hostname = shift;
+	my $retval = 0;
+	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
+	my $sth = $dbh->prepare("SELECT hid FROM hosts WHERE sid='$sid' and ip4='$ip4' AND hostname='$hostname'") or die $DBI::stderr;
+	my $rtv = $sth->execute() or die $DBI::stderr;
+	print "check_host_record::RTV: $rtv\n" if ($verbose);
+	while (my @row = $sth->fetchrow_array()) {
+		$retval = $row[0];
+	}
+	$sth->finish() or die $DBI::stderr;
+	$dbh->disconnect() or die $DBI::stderr;
+	return $retval;
+}
