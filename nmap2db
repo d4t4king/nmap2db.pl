@@ -39,10 +39,10 @@ $up = 0 unless($up);
 
 my %table_sql = (
 	'nmap'			=> 'CREATE TABLE IF NOT EXISTS nmap (sid INT NOT NULL AUTO_INCREMENT, version VARCHAR(8), xmlversion VARCHAR(8), args VARCHAR(255), types VARCHAR(255), starttime DATETIME, startstr VARCHAR(255), endtime DATETIME, endstr VARCHAR(255), numservices INT, PRIMARY KEY (sid))',
-	'hosts'			=> 'CREATE TABLE IF NOT EXISTS hosts (sid INT NOT NULL, hid INT NOT NULL AUTO_INCREMENT, ip4 VARCHAR(16), ip4num VARCHAR(255), hostname VARCHAR(255), status VARCHAR(255), tcpcount INT, udpcount INT, mac VARCHAR(24), vendor VARCHAR(255), ip6 VARCHAR(64), distance INT, uptime VARCHAR(255), upstr VARCHAR(255), PRIMARY KEY(hid))',
-	'sequencing'	=> 'CREATE TABLE IF NOT EXISTS sequencing (hid INT NOT NULL, sid INT NOT NULL, tcpclass VARCHAR(255), tcpindex VARCHAR(255), tcpvalues VARCHAR(255), ipclass VARCHAR(255), ipvalues VARCHAR(255), tcptclass VARCHAR(255), tcptvalues VARCHAR(255))',
-	'port'			=> 'CREATE TABLE IF NOT EXISTS ports (hid INT NOT NULL, sid INT NOT NULL, port INT, type VARCHAR(255), state VARCHAR(255), name VARCHAR(255), tunnel VARCHAR(255), product VARCHAR(255), version VARCHAR(255), extra VARCHAR(255), confidence INT, method VARCHAR(255), proto VARCHAR(255), owner VARCHAR(255), rpcnum VARCHAR(255), fingerprint TEXT)',
-	'os'			=> 'CREATE TABLE IF NOT EXISTS os (hid INT NOT NULL, sid INT NOT NULL, name VARCHAR(255), family VARCHAR(255), generation VARCHAR(255), type VARCHAR(255), vendor VARCHAR(255), accuracy INT)',
+	'hosts'			=> 'CREATE TABLE IF NOT EXISTS hosts (hid INT NOT NULL AUTO_INCREMENT, sid INT NOT NULL, ip4 VARCHAR(16), ip4num VARCHAR(255), hostname VARCHAR(255), status VARCHAR(255), tcpcount INT, udpcount INT, mac VARCHAR(24), vendor VARCHAR(255), ip6 VARCHAR(64), distance INT, uptime VARCHAR(255), upstr VARCHAR(255), PRIMARY KEY(hid))',
+	'sequencing'	=> 'CREATE TABLE IF NOT EXISTS sequencing (seq_id INT NOT NULL AUTO_INCREMENT, hid INT NOT NULL, sid INT NOT NULL, tcpclass VARCHAR(255), tcpindex VARCHAR(255), tcpvalues VARCHAR(255), ipclass VARCHAR(255), ipvalues VARCHAR(255), tcptclass VARCHAR(255), tcptvalues VARCHAR(255), PRIMARY KEY(seq_id))',
+	'ports'			=> 'CREATE TABLE IF NOT EXISTS ports (port_id INT NOT NULL AUTO_INCREMENT, hid INT NOT NULL, sid INT NOT NULL, port INT, type VARCHAR(255), state VARCHAR(255), name VARCHAR(255), tunnel VARCHAR(255), product VARCHAR(255), version VARCHAR(255), extra VARCHAR(255), confidence INT, method VARCHAR(255), proto VARCHAR(255), owner VARCHAR(255), rpcnum VARCHAR(255), fingerprint TEXT, PRIMARY KEY(port_id))',
+	'os'			=> 'CREATE TABLE IF NOT EXISTS os (os_id INT NOT NULL AUTO_INCREMENT, hid INT NOT NULL, sid INT NOT NULL, name VARCHAR(255), family VARCHAR(255), generation VARCHAR(255), type VARCHAR(255), vendor VARCHAR(255), accuracy INT, PRIMARY KEY(os_id))',
 );
 
 if ($help) { &usage(); }
@@ -180,13 +180,13 @@ if ($masscan) {
 					$rtv = $dbh->do("CREATE DATABASE $dbname;");
 					print "CREATE DATABASE RTV: $rtv\n" if ($verbose);
 				}
+				$dbh->disconnect();
 				# check if the tables exist (?)
 				# blindly create them if they don't exist
 				foreach my $tbl ( sort keys %table_sql ) {
 					my $rtv = &create_table($tbl);
 					print "CREATE TABLE ($tbl) RTV: $rtv\n";
 				}
-				$dbh->disconnect();
 				### process the nmap data
 				# check if a session record already exists
 				my $sid = &check_scan_record($sess->scan_args(), $sess->start_str(), $sess->Time_str());
@@ -223,7 +223,7 @@ if ($masscan) {
 						print "HID = $hid\n" if ($verbose);
 						if ((!defined($hid)) or ($hid == 0)) {
 							print "Host record not found, creating...\n" if ($verbose);
-							print Dumper($host) if ($verbose);
+							print Dumper($host) if (($verbose) and ($verbose > 2));
 							my %params = (
 								'sid'				=>	$sid,
 								'ip4'				=>	$host->ipv4_addr(),
@@ -241,14 +241,15 @@ if ($masscan) {
 							);
 							my $rtv = &insert_host_record(\%params);
 							print "insert_host_record::RTV: $rtv\n" if ($verbose);
+							$hid = &check_host_record($sid, $host->ipv4_addr(), $host->hostname());
 						} else {
 							# got a host id
 							print "Host ID exists: $hid\n";
 						}
-						### check for a sew record with thie scan id and 
+						### check for a sequencing record with thie scan id and 
 						### tcpsequence_class, tcpsequence_index, tcpsequence_values
 						if (&record_exists($hid, $sid, 'sequencing', $host->tcpsequence_class())) {
-							print "sequencing record exists for scan and host.  skipping....\n" if ($verbose);
+							print "sequencing record exists for scan and host.  Skipping....\n" if ($verbose);
 						} else {
 							my %params = (
 								'hid'					=>	$hid,
@@ -264,46 +265,55 @@ if ($masscan) {
 							my $rtv = &insert_seq_record(\%params);
 							print "insert_seq_record::RTV: $rtv\n" if ($verbose);
 						}
-						my $pc = 0;
-						if (defined($host->tcp_open_ports())) { $pc = scalar(@{$host->tcp_open_ports()}); }
-						if ( $pc > 0) {
-							my @pnums = $host->tcp_open_ports();
+						### tcp open ports
+						my @pnums = $host->tcp_open_ports();
+						print join("|", @pnums)."\n";
+						if (scalar(@pnums) > 0) {
 							foreach my $pnum ( sort @pnums ) {
 								my $port_obj = $host->tcp_service($pnum);
-								if ($verbose) {
-									print Dumper($port_obj);
+								print Dumper($port_obj) if (($verbose) and ($verbose > 1));
+								if (&check_port_record($hid, $sid, $pnum, 'open', $port_obj->proto())) {
+									print "Port record exists for scan and host.  Skipping....\n" if ($verbose);
+								} else {
+									my %params = (
+										'hid'				=>	$hid,
+										'sid'				=>	$sid,
+										'port_num'			=>	$pnum,
+										''					=>	'',				### This was in the ruby version.  Not sure why or if it's needed here.
+										'state'				=>	'open',			# we're only querying the host obj for open ports
+										'service_name'		=>	$port_obj->name(),
+										'service_tunnel'	=>	$port_obj->tunnel(),
+										'product'			=>	$port_obj->product(),
+										'version'			=>	$port_obj->version(),
+										'extra'				=>	$port_obj->extra(),
+										'confidence'		=>	$port_obj->confidence(),
+										'method'			=>	$port_obj->method(),
+										'protocol'			=>	$port_obj->proto(),
+										'owner'				=>	$port_obj->owner(),
+										'rpcnum'			=>	$port_obj->rpcnum(),
+										'fingerprint'		=>	$port_obj->fingerprint(),
+									);
+									my $rtv = &insert_ports_record(\%params);
+									print "insert_ports_record::RTV: $rtv\n" if ($verbose);
 								}
-								my %params = (
-									'hid'				=>	$hid,
-									'sid'				=>	$sid,
-									'port_num'			=>	$pnum,
-									''					=>	'',				### This was in the ruby version.  Not sure why or if it's needed here.
-									'state'				=>	'open',			# we're only querying the host obj for open ports
-									'service_name'		=>	$port_obj->name(),
-									'service_tunnel'	=>	$port_obj->tunnel(),
-									'product'			=>	$port_obj->product(),
-									'version'			=>	$port_obj->version(),
-									'extra'				=>	$port_obj->extra(),
-									'confidence'		=>	$port_obj->confidence(),
-									'method'			=>	$port_obj->method(),
-									'protocol'			=>	$port_obj->proto(),
-									'owner'				=>	$port_obj->owner(),
-									'rpcnum'			=>	$port_obj->rpcnum(),
-									'fingerprint'		=>	$port_obj->fingerprint(),
-								);
-								my $rtv = &insert_ports_record(\%params);
-								print "insert_ports_record::RTV: $rtv\n" if ($verbose);
 							}
+						} else {
+							print "TCP open port count is zero 0.\n";
+						}
+						### udp open ports
+						@pnums = $host->udp_open_ports();
+						if (scalar(@pnums) > 0) {
+							print "Found open UDP ports in nmap data.\n";
 						}
 					}
 				}
 			### csv
-			} else {
+			} else {	# output CSV format
 				# (default output to csv)
 				open CSV, ">$output" or die "Couldn't open output file ($output): $!";
 				print CSV "IP,Hostname,OS Guess,Accuracy,Host Status,Open Ports,Start Time\n";
 				foreach my $h ( @nmap_hosts ) {
-					print Dumper($h) if (($verbose) and ($verbose >= 3));
+					print Dumper($h) if (($verbose) and ($verbose >= 2));
 					my $os = $h->os_sig();
 					my $port_str;
 					my @tcpports = $h->tcp_open_ports();
@@ -327,7 +337,7 @@ if ($masscan) {
 				}
 				close CSV or die "There was a problem closing the CSV file: $! ";
 			}
-		} else {
+		} else {	# input does not exist or is zero bytes
 			if ( -z $input ) {
 				die "Input file is zero (0) bytes.";
 			} elsif ( -d $input ) {
@@ -336,11 +346,11 @@ if ($masscan) {
 				die "Specified input is not a file.";
 			}
 		}
-	} else {
+	} else {	# must define input file
 		print "You must specify an input file!\n";
 		&usage();
-	}
-}
+	}	# end if (defined($input))
+}	# end if (masscan)
 ###############################################################################
 ### Subs
 ###############################################################################
@@ -382,9 +392,7 @@ sub create_table {
 	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
 	my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
 	my $rtv = $dbh->do($table_sql{$table_name}) or die $DBI::stderr;
-	if ($table_name =~ /^(?:hosts|nmap)$/) {
-		$rtv = $dbh->do("ALTER TABLE $table_name AUTO_INCREMENT = 1;") or die $DBI::stderr;
-	}
+	$rtv = $dbh->do("ALTER TABLE $table_name AUTO_INCREMENT = 1;") or die $DBI::stderr;
 	$dbh->disconnect() or die $DBI::stderr;
 	print "create_table::RTV: $rtv\n" if ($verbose);
 	return $rtv;
@@ -394,7 +402,7 @@ sub insert_nmap_record {
 	my $data_ref = shift;
 	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
-	my $rtv = $dbh->do("INSERT INTO nmap (version,xmlversion,args,types,starttime,startstr,endtime,endstr,numservices) VALUES ('$data_ref->{'version'}','$data_ref->{'xmlversion'}','$data_ref->{'args'}', '$data_ref->{'types'}', '$data_ref->{'starttime'}', '$data_ref->{'startstr'}', '$data_ref->{'endtime'}', '$data_ref->{'endstr'}', '$data_ref->{'numservices'}')");
+	my $rtv = $dbh->do("INSERT INTO nmap (version,xmlversion,args,types,starttime,startstr,endtime,endstr,numservices) VALUES ('$data_ref->{'version'}','$data_ref->{'xmlversion'}','$data_ref->{'args'}', '$data_ref->{'types'}', FROM_UNIXTIME($data_ref->{'starttime'}), '$data_ref->{'startstr'}', FROM_UNIXTIME($data_ref->{'endtime'}), '$data_ref->{'endstr'}', '$data_ref->{'numservices'}')");
 	print "insert_nmap_record::RTV: $rtv\n" if ($verbose);
 	return $rtv;
 }
@@ -424,8 +432,8 @@ sub insert_seq_record {
 	my $data_ref = shift;
 	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
-	my $rtv = $dbh->do("INSERT INTO sequencing (hid,sid,tcpclass,tcpindex,tcpvalues,ipclass,ipvalues,tcptclass,tcptvalues) VALUES ('$data_ref->{'hid'}', '$data_ref->{'sed'}', '$data_ref->{'tcpclass'}', '$data_ref->{'tcpindex'}', '$data_ref->{'tcpvalues'}', '$data_ref->{'ipclass'}', '$data_ref->{'ipvalues'}', '$data_ref->{'tcptclass'}', '$data_ref->{'tcptvalues'}')");
-	print "insert_seq_record::RTV: $rtv\n" if ($verbose);
+	my $rtv = $dbh->do("INSERT INTO sequencing (hid,sid,tcpclass,tcpindex,tcpvalues,ipclass,ipvalues,tcptclass,tcptvalues) VALUES ('$data_ref->{'hid'}', '$data_ref->{'sid'}', '$data_ref->{'tcpclass'}', '$data_ref->{'tcpindex'}', '$data_ref->{'tcpvalues'}', '$data_ref->{'ipclass'}', '$data_ref->{'ipvalues'}', '$data_ref->{'tcptclass'}', '$data_ref->{'tcptvalues'}')");
+	#print "insert_seq_record::RTV: $rtv\n" if ($verbose);
 	return $rtv;
 }
 
@@ -433,8 +441,8 @@ sub insert_ports_record {
 	my $data_ref = shift;
 	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
-	my $rtv = $dbh->do("INSERT INTO ports (hid,sid,port,type,state,name,tunnel,product,version,extra,confidence,method,proto,owner,rpcnum,fingerprint) VALUES ($data_ref->{'hid'}, $data_ref->{'sid'}. $data_ref->{'port'}, $data_ref->{'type'}, $data_ref->{'state'}, $data_ref->{'name'}, $data_ref->{'tunnel'}, $data_ref->{'product'}, $data_ref->{'version'}, $data_ref->{'extra'}, $data_ref->{'confidence'}, $data_ref->{'method'}, $data_ref->{'proto'}, $data_ref->{'owner'}, $data_ref->{'rpcnum'}, $data_ref->{'fingerprint'})");
-	print "insert_ports_record::RTV: $rtv\n" if ($verbose);
+	my $rtv = $dbh->do("INSERT INTO ports (hid,sid,port,type,state,name,tunnel,product,version,extra,confidence,method,proto,owner,rpcnum,fingerprint) VALUES ('$data_ref->{'hid'}','$data_ref->{'sid'}','$data_ref->{'port'}','$data_ref->{'type'}','$data_ref->{'state'}','$data_ref->{'name'}','$data_ref->{'tunnel'}','$data_ref->{'product'}','$data_ref->{'version'}','$data_ref->{'extra'}','$data_ref->{'confidence'}','$data_ref->{'method'}','$data_ref->{'proto'}','$data_ref->{'owner'}','$data_ref->{'rpcnum'}','$data_ref->{'fingerprint'}')");
+	#print "insert_ports_record::RTV: $rtv\n" if ($verbose);
 	return $rtv;
 }
 
@@ -482,6 +490,26 @@ sub check_host_record {
 	}
 	$sth->finish() or die $DBI::stderr;
 	$dbh->disconnect() or die $DBI::stderr;
+	return $retval;
+}
+
+sub check_port_record {
+	my $hid = shift;
+	my $sid = shift;
+	my $portnum = shift;
+	my $portstate = shift;
+	my $portproto = shift;
+	my $retval = 0;
+	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
+	my $sth = $dbh->prepare("SELECT hid FROM ports WHERE hid='$hid' AND sid='$sid' AND port='$portnum' AND state='$portstate' AND proto='$portproto';");
+	$sth->execute();
+	while (my @row = $sth->fetchrow_array()) {
+		$retval = $row[0];
+		last;
+	}
+	$sth->finish();
+	$dbh->disconnect();
 	return $retval;
 }
 
