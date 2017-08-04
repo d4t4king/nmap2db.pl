@@ -185,7 +185,7 @@ if ($masscan) {
 				# blindly create them if they don't exist
 				foreach my $tbl ( sort keys %table_sql ) {
 					my $rtv = &create_table($tbl);
-					print "CREATE TABLE ($tbl) RTV: $rtv\n";
+					print "CREATE TABLE ($tbl) RTV: $rtv\n" if (($verbose) and ($verbose > 1));
 				}
 				### process the nmap data
 				# check if a session record already exists
@@ -206,10 +206,10 @@ if ($masscan) {
 						'endstr'		=> $sess->time_str(),
 						'numservices'	=> $sess->numservices(),
 					);
-					print Dumper(\%params);
+					print Dumper(\%params) if (($verbose) and ($verbose > 2));
 					my $rtv = &insert_nmap_record(\%params);
 					$sid = &check_scan_record($sess->scan_args(), $sess->start_str(), $sess->time_str());
-					print "SID after insert: $sid\n";
+					print "SID after insert: $sid\n" if (($verbose) and ($verbose > 1));
 				}
 				if (scalar(@nmap_hosts) == 0) {
 					print "There are no hosts in this scan." unless ($quiet);
@@ -267,9 +267,10 @@ if ($masscan) {
 						}
 						### tcp open ports
 						my @pnums = $host->tcp_open_ports();
-						print join("|", @pnums)."\n";
+						print join("|", @pnums)."\n" if (($verbose) && ($verbose > 2));
 						if (scalar(@pnums) > 0) {
 							foreach my $pnum ( sort @pnums ) {
+ 								print "PORT: $pnum\n" if (($verbose) and ($verbose > 2));
 								my $port_obj = $host->tcp_service($pnum);
 								print Dumper($port_obj) if (($verbose) and ($verbose > 1));
 								if (&check_port_record($hid, $sid, $pnum, 'open', $port_obj->proto())) {
@@ -298,14 +299,35 @@ if ($masscan) {
 								}
 							}
 						} else {
-							print "TCP open port count is zero 0.\n";
+							print "TCP open port count is zero 0.\n" if (($verbose) and ($verbose > 1));
 						}
 						### udp open ports
 						@pnums = $host->udp_open_ports();
 						if (scalar(@pnums) > 0) {
 							print "Found open UDP ports in nmap data.\n";
 						}
-					}
+						### os records
+						my $os = $host->os_sig();
+						print Dumper($os) if (($verbose) and ($verbose > 2));
+						no warnings;
+						if (&record_exists($sid, $hid, 'os', $os->name())) {
+							print "OS record for host and scan already exists.  Skipping....\n" if ($verbose);
+						} else {
+							my %params = (
+								'hid'				=>	$hid,
+								'sid'				=>	$sid,
+								'os_name'			=>	$os->name(),
+								'os_family'			=>	$os->osfamily(),
+								'os_gen'			=>	$os->osgen(),
+								'os_type'			=>	$os->type(),
+								'os_vendor'			=>	$os->vendor(),
+								'class_accuracy'	=>	$os->class_accuracy(),
+							);
+							my $rtv = &insert_os_record(\%params);
+							print "insert_os_record::RTV: $rtv\n" if ($verbose);
+						}
+						use warnings;
+					}	# end foreach my $host...
 				}
 			### csv
 			} else {	# output CSV format
@@ -320,14 +342,14 @@ if ($masscan) {
 					my @udpports = $h->udp_open_ports();
 					if (scalar(@tcpports) > 0) {
 						print "\@tcpports defined\n" if (($verbose) and ($verbose > 2));
-						$port_str .= "T:".join("|", @tcpports);
+						$port_str .= "T:".join("|", @tcpports) if (($verbose) && ($verbose > 2));
 					} else {
 						print Dumper($h->{'ports'}) if (($verbose) and ($verbose > 2));
 						print "No open TCP ports found for host (".$h->ipv4_addr().")\n" if ($verbose);
 					}
 					if (scalar(@udpports) > 0) {
 						print "\@udpports defined\n" if (($verbose) and ($verbose > 2));
-						$port_str .= "|".join("|", @udpports);
+						$port_str .= "|".join("|", @udpports) if (($verbose) and ($verbose > 2));
 					} else {
 						print Dumper($h->{'ports'}) if (($verbose) and ($verbose > 2));
 						print "No open UDP ports found for host (".$h->ipv4_addr().")\n" if ($verbose);
@@ -420,8 +442,10 @@ sub insert_host_record {
 	}
 	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
-    print Dumper($data_ref) if ($verbose);
+    print Dumper($data_ref) if (($verbose) and ($verbose > 2));
+    no warnings;
     my $sql = "INSERT INTO hosts (sid,ip4,ip4num,hostname,status,tcpcount,udpcount,mac,vendor,ip6,distance,uptime,upstr) VALUES ('$data_ref->{'sid'}','$data_ref->{'ip4'}','[ip4num]','$data_ref->{'hostname'}','$data_ref->{'status'}','$data_ref->{'tcpcount'}','$data_ref->{'udpcount'}','$data_ref->{'mac'}','$data_ref->{'vendor'}','$data_ref->{'ip6'}','$data_ref->{'distance'}','$data_ref->{'uptime'}','$data_ref->{'upstr'}')";
+    use warnings;
     print "insert_)host_record::SQL: $sql\n" if ($verbose);
 	my $rtv = $dbh->do("$sql");
 	print "insert_host_record::RTV: $rtv\n" if ($verbose);
@@ -432,7 +456,9 @@ sub insert_seq_record {
 	my $data_ref = shift;
 	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
-	my $rtv = $dbh->do("INSERT INTO sequencing (hid,sid,tcpclass,tcpindex,tcpvalues,ipclass,ipvalues,tcptclass,tcptvalues) VALUES ('$data_ref->{'hid'}', '$data_ref->{'sid'}', '$data_ref->{'tcpclass'}', '$data_ref->{'tcpindex'}', '$data_ref->{'tcpvalues'}', '$data_ref->{'ipclass'}', '$data_ref->{'ipvalues'}', '$data_ref->{'tcptclass'}', '$data_ref->{'tcptvalues'}')");
+    no warnings;
+	my $rtv = $dbh->do("INSERT INTO sequencing (hid,sid,tcpclass,tcpindex,tcpvalues,ipclass,ipvalues,tcptclass,tcptvalues) VALUES ('$data_ref->{'hid'}', '$data_ref->{'sid'}', '$data_ref->{'tcpsequence_class'}', '$data_ref->{'tcpsequence_index'}', '$data_ref->{'tcpsequence_values'}', '$data_ref->{'ipidsequence_class'}', '$data_ref->{'ipidsequence_values'}', '$data_ref->{'tcptsequence_class'}', '$data_ref->{'tcptsequence_values'}')");
+	use warnings;
 	#print "insert_seq_record::RTV: $rtv\n" if ($verbose);
 	return $rtv;
 }
@@ -441,7 +467,9 @@ sub insert_ports_record {
 	my $data_ref = shift;
 	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
-	my $rtv = $dbh->do("INSERT INTO ports (hid,sid,port,type,state,name,tunnel,product,version,extra,confidence,method,proto,owner,rpcnum,fingerprint) VALUES ('$data_ref->{'hid'}','$data_ref->{'sid'}','$data_ref->{'port'}','$data_ref->{'type'}','$data_ref->{'state'}','$data_ref->{'name'}','$data_ref->{'tunnel'}','$data_ref->{'product'}','$data_ref->{'version'}','$data_ref->{'extra'}','$data_ref->{'confidence'}','$data_ref->{'method'}','$data_ref->{'proto'}','$data_ref->{'owner'}','$data_ref->{'rpcnum'}','$data_ref->{'fingerprint'}')");
+    no warnings;
+	my $rtv = $dbh->do("INSERT INTO ports (hid,sid,port,type,state,name,tunnel,product,version,extra,confidence,method,proto,owner,rpcnum,fingerprint) VALUES ('$data_ref->{'hid'}','$data_ref->{'sid'}','$data_ref->{'port_num'}','$data_ref->{'type'}','$data_ref->{'state'}','$data_ref->{'service_name'}','$data_ref->{'service_tunnel'}','$data_ref->{'product'}','$data_ref->{'version'}','$data_ref->{'extra'}','$data_ref->{'confidence'}','$data_ref->{'method'}','$data_ref->{'proto'}','$data_ref->{'owner'}','$data_ref->{'rpcnum'}','".quotemeta($data_ref->{'fingerprint'})."')");
+	use warnings;
 	#print "insert_ports_record::RTV: $rtv\n" if ($verbose);
 	return $rtv;
 }
@@ -450,7 +478,9 @@ sub insert_os_record {
 	my $data_ref = shift;
 	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
-	my $rtv = $dbh->do("INSERT INTO os (hid,sid,name,family,generation,type,vendor,accuracy) VALUES ($data_ref->{'hid'}, $data_ref->{'sid'}, $data_ref->{'name'}, $data_ref->{'family'}, $data_ref->{'generation'}, $data_ref->{'type'}, $data_ref->{'vendor'}, $data_ref->{'accuracy'})");
+    no warnings;
+	my $rtv = $dbh->do("INSERT INTO os (hid,sid,name,family,generation,type,vendor,accuracy) VALUES ('$data_ref->{'hid'}', '$data_ref->{'sid'}', '$data_ref->{'os_name'}', '$data_ref->{'os_family'}', '$data_ref->{'os_gen'}', '$data_ref->{'os_type'}', '$data_ref->{'os_vendor'}', '$data_ref->{'class_accuracy'}')");
+	use warnings;
 	print "insert_os_record::RTV: $rtv\n" if ($verbose);
 	return $rtv;
 }
@@ -518,11 +548,13 @@ sub record_exists {
 	my $sid = shift;
 	my $rec_type = shift;
 	my $extra = shift;
+	no warnings;
 	my $retval = 0;
 	my %sql = (
 		'sequencing'	=>	"SELECT hid FROM sequencing WHERE hid='$hid' AND sid='$sid' AND tcpclass='$extra'",
 		'os'			=>	"SELECT hid FROM os WHERE hid='$hid' AND sid='$sid' AND name='$extra'",
 	);
+	use warnings;
 	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
 	my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
 	my $sth = $dbh->prepare($sql{$rec_type}) or die $DBI::stderr;
