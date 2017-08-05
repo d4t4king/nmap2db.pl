@@ -3,6 +3,7 @@
 use strict;
 use warnings;
 use feature qw( switch );
+no if $] >= 5.017011, warnings => 'experimental::smartmatch';
 
 use DBI;
 use Data::Dumper;
@@ -193,9 +194,11 @@ if ($masscan) {
 							print "CREATE TABLE ($tbl) RTV: $rtv\n" if (($verbose) and ($verbose > 1));
 						}
 						### create useful views -- TBD
+						$dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
 						$dbh = DBI->connect($dsn, $dbuser, $dbpass);
 						$rtv = $dbh->do("CREATE VIEW vw_ports_on_host AS SELECT h.ip4,h.hostname,h.status,p.port,p.name,p.product,p.version,p.method,p.confidence,p.extra FROM hosts h INNER JOIN ports p ON h.hid=p.hid;");
 						print "view_creator_RTV: $rtv\n" if ($verbose);
+						$dbh->disconnect();
 						### process the nmap data
 						# check if a session record already exists
 						my $sid = &check_scan_record($sess->scan_args(), $sess->start_str(), $sess->Time_str());
@@ -338,6 +341,9 @@ if ($masscan) {
 								use warnings;
 							}	# end foreach my $host...
 						}	# end when (mysql)
+						when ('sqlite') {
+						
+						}	# end when (sqlite)
 					}	# end given($dbtype)
 				}
 			### csv
