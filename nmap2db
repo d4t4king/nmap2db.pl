@@ -40,19 +40,28 @@ $excel = 0 unless ($excel);
 $up = 0 unless($up);
 
 my %table_sql = (
-	'nmap'			=> 'CREATE TABLE IF NOT EXISTS nmap (sid INT NOT NULL AUTO_INCREMENT, version VARCHAR(8), xmlversion VARCHAR(8), args VARCHAR(255), types VARCHAR(255), starttime DATETIME, startstr VARCHAR(255), endtime DATETIME, endstr VARCHAR(255), numservices INT, PRIMARY KEY (sid))',
-	'hosts'			=> 'CREATE TABLE IF NOT EXISTS hosts (hid INT NOT NULL AUTO_INCREMENT, sid INT NOT NULL, ip4 VARCHAR(16), ip4num VARCHAR(255), hostname VARCHAR(255), status VARCHAR(255), tcpcount INT, udpcount INT, mac VARCHAR(24), vendor VARCHAR(255), ip6 VARCHAR(64), distance INT, uptime VARCHAR(255), upstr VARCHAR(255), PRIMARY KEY(hid))',
-	'sequencing'	=> 'CREATE TABLE IF NOT EXISTS sequencing (seq_id INT NOT NULL AUTO_INCREMENT, hid INT NOT NULL, sid INT NOT NULL, tcpclass VARCHAR(255), tcpindex VARCHAR(255), tcpvalues VARCHAR(255), ipclass VARCHAR(255), ipvalues VARCHAR(255), tcptclass VARCHAR(255), tcptvalues VARCHAR(255), PRIMARY KEY(seq_id))',
-	'ports'			=> 'CREATE TABLE IF NOT EXISTS ports (port_id INT NOT NULL AUTO_INCREMENT, hid INT NOT NULL, sid INT NOT NULL, port INT, type VARCHAR(255), state VARCHAR(255), name VARCHAR(255), tunnel VARCHAR(255), product VARCHAR(255), version VARCHAR(255), extra VARCHAR(255), confidence INT, method VARCHAR(255), proto VARCHAR(255), owner VARCHAR(255), rpcnum VARCHAR(255), fingerprint TEXT, PRIMARY KEY(port_id))',
-	'os'			=> 'CREATE TABLE IF NOT EXISTS os (os_id INT NOT NULL AUTO_INCREMENT, hid INT NOT NULL, sid INT NOT NULL, name VARCHAR(255), family VARCHAR(255), generation VARCHAR(255), type VARCHAR(255), vendor VARCHAR(255), accuracy INT, PRIMARY KEY(os_id))',
+	'mysql' => {
+		'nmap'			=> 'CREATE TABLE IF NOT EXISTS nmap (sid INT NOT NULL AUTO_INCREMENT, version VARCHAR(8), xmlversion VARCHAR(8), args VARCHAR(255), types VARCHAR(255), starttime DATETIME, startstr VARCHAR(255), endtime DATETIME, endstr VARCHAR(255), numservices INT, PRIMARY KEY (sid))',
+		'hosts'			=> 'CREATE TABLE IF NOT EXISTS hosts (hid INT NOT NULL AUTO_INCREMENT, sid INT NOT NULL, ip4 VARCHAR(16), ip4num VARCHAR(255), hostname VARCHAR(255), status VARCHAR(255), tcpcount INT, udpcount INT, mac VARCHAR(24), vendor VARCHAR(255), ip6 VARCHAR(64), distance INT, uptime VARCHAR(255), upstr VARCHAR(255), PRIMARY KEY(hid))',
+		'sequencing'	=> 'CREATE TABLE IF NOT EXISTS sequencing (seq_id INT NOT NULL AUTO_INCREMENT, hid INT NOT NULL, sid INT NOT NULL, tcpclass VARCHAR(255), tcpindex VARCHAR(255), tcpvalues VARCHAR(255), ipidclass VARCHAR(255), ipidvalues VARCHAR(255), tcptclass VARCHAR(255), tcptvalues VARCHAR(255), PRIMARY KEY(seq_id))',
+		'ports'			=> 'CREATE TABLE IF NOT EXISTS ports (port_id INT NOT NULL AUTO_INCREMENT, hid INT NOT NULL, sid INT NOT NULL, port INT, type VARCHAR(255), state VARCHAR(255), name VARCHAR(255), tunnel VARCHAR(255), product VARCHAR(255), version VARCHAR(255), extra VARCHAR(255), confidence INT, method VARCHAR(255), proto VARCHAR(255), owner VARCHAR(255), rpcnum VARCHAR(255), fingerprint TEXT, PRIMARY KEY(port_id))',
+		'os'			=> 'CREATE TABLE IF NOT EXISTS os (os_id INT NOT NULL AUTO_INCREMENT, hid INT NOT NULL, sid INT NOT NULL, name VARCHAR(255), family VARCHAR(255), generation VARCHAR(255), type VARCHAR(255), vendor VARCHAR(255), accuracy INT, PRIMARY KEY(os_id))',
+	},
+	'sqlite' => {
+		'nmap'			=>	'CREATE TABLE IF NOT EXISTS nmap (sid INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, version TEXT, xmlversion TEXT, args TEXT, types TEXT, starttime INTEGER, startstr TEXT, endtime INTEGER, endstr TEXT, numservices INTEGER)',
+		'hosts'			=>	'CREATE TABLE IF NOT EXISTS hosts (hid INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, sid INTEGER NOT NULL, ip4 TEXT, ip4num TEXT, hostname TEXT, status TEXT, tcpcount INTEGER, udpcount INTEGER, mac TEXT, vendor TEXT, ip6 TEXT, distance INTEGER, uptime REAL, upstr TEXT)',
+		'sequencing'	=>	'CREATE TABLE IF NOT EXISTS sequencing (seq_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, hid INTEGER NOT NULL, sid INTEGER NOT NULL, tcpclass TEXT, tcpindex TEXT, tcpvalues TEXT, ipidclass TEXT, ipidvalues TEXT, tcptclass TEXT, tcptvalues TEXT)',
+		'ports'			=>	'CREATE TABLE IF NOT EXISTS ports (port_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, hid INTEGER NOT NULL, sid INTEGER NOT NULL, port INTEGER, type TEXT, state TEXT, name TEXT, tunnel TEXT, product TEXT, version TEXT, extra TEXT, confidence INTEGER, method TEXT, proto TEXT, owner TEXT, rpcnum TEXST, fingerprint TEXT)',
+		'os'			=>	'CREATE TABLE IF NOT EXISTS os (os_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, hid INTEGER NOT NULL, sid INTEGER NOT NULL, name TEXT, family TEXT, generation TEXT, type TEXT, vendor TEXT, accuracy TEXT)',
+	},
 );
 
 if ($help) { &usage(); }
 
 if (($verbose) and ($quiet)) { print "Can't be both verbose and quiet.  Pick one."; exit 1; }
 
-if (($dbtype) and ($dbtype !~ /(?:mysql|mssql)/)) {
-	print "Can only accept database types of mysql or mssql.\n";
+if (($dbtype) and ($dbtype !~ /(?:mysql|mssql|sqlite)/)) {
+	print "Can only accept database types of sqlite, mysql or mssql.\n";
 	exit 1;
 }
 
@@ -189,7 +198,7 @@ if ($masscan) {
 						$dbh->disconnect();
 						# check if the tables exist (?)
 						# blindly create them if they don't exist
-						foreach my $tbl ( sort keys %table_sql ) {
+						foreach my $tbl ( sort keys %{$table_sql{$dbtype}} ) {
 							my $rtv = &create_table($tbl);
 							print "CREATE TABLE ($tbl) RTV: $rtv\n" if (($verbose) and ($verbose > 1));
 						}
@@ -340,12 +349,163 @@ if ($masscan) {
 								}
 								use warnings;
 							}	# end foreach my $host...
-						}	# end when (mysql)
-						when ('sqlite') {
-						
-						}	# end when (sqlite)
-					}	# end given($dbtype)
-				}
+						}	# end else (scalar(@nmap_hosts)
+					}	# end when (mysql)
+					when ('sqlite') {
+						my $dsn = "DBI:SQLite:dbname=$dbname";
+						my $dbh = DBI->connect($dsn, "", "") or die $DBI::stderr;
+						# blindly create them if they don't exist
+						foreach my $tbl ( sort keys %{$table_sql{$dbtype}} ) {
+							my $rtv = &create_table($tbl);
+							print "CREATE TABLE ($tbl) RTV: $rtv\n" if (($verbose) and ($verbose > 1));
+						}
+						my $rtv = $dbh->do("CREATE VIEW vw_ports_on_host AS SELECT h.ip4,h.hostname,h.status,p.port,p.name,p.product,p.version,p.method,p.confidence,p.extra FROM hosts h INNER JOIN ports p ON h.hid=p.hid;");
+						print "view_creator_RTV: $rtv\n" if ($verbose);
+						$dbh->disconnect();
+						### process the nmap data
+						# check if a session record already exists
+						my $sid = &check_scan_record($sess->scan_args(), $sess->start_str(), $sess->Time_str());
+						print "&check_scan_record(".$sess->scan_args().", ".$sess->start_str().", ".$sess->time_str().");\n" if ($verbose);
+						print "SID: $sid\n" if ($verbose);
+						if (($sid =~ /^\d+$/) and ($sid > 0)) {
+							print "Scan record already exists.  SID = $sid\n" unless ($quiet);
+						} else {	# add new session
+							my %params = (
+								'version'		=> $sess->nmap_version(),
+								'xmlversion'	=> $sess->xml_version(),
+								'args'			=> $sess->scan_args(),
+								'types'			=> $sess->scan_types(),
+								'starttime'		=> $sess->start_time(),
+								'startstr'		=> $sess->start_str(),
+								'endtime'		=> $sess->finish_time(),
+								'endstr'		=> $sess->time_str(),
+								'numservices'	=> $sess->numservices(),
+							);
+							print Dumper(\%params) if (($verbose) and ($verbose > 2));
+							my $rtv = &insert_nmap_record(\%params);
+							$sid = &check_scan_record($sess->scan_args(), $sess->start_str(), $sess->time_str());
+							print "SID after insert: $sid\n" if (($verbose) and ($verbose > 1));
+						}
+						if (scalar(@nmap_hosts) == 0) {
+							print "There are no hosts in this scan." unless ($quiet);
+						} else {	# add new hosts
+							foreach my $host ( @nmap_hosts ) {
+								my $hid = 0;
+								# check for a host record with this scan ID (sid) and
+								# the same ip and hostname
+								print "\&check_host_record($sid, ".$host->ipv4_addr().", ".$host->hostname().")\n" if ($verbose);
+								$hid = &check_host_record($sid, $host->ipv4_addr(), $host->hostname());
+								print "HID = $hid\n" if ($verbose);
+								if ((!defined($hid)) or ($hid == 0)) {
+									print "Host record not found, creating...\n" if ($verbose);
+									print Dumper($host) if (($verbose) and ($verbose > 2));
+									my %params = (
+										'sid'				=>	$sid,
+										'ip4'				=>	$host->ipv4_addr(),
+										'ip4num'			=>	'[ip4num]',
+										'hostname'			=>	$host->hostname(),
+										'status'			=>	$host->status(),
+										'tcpcount'			=>	$host->tcp_port_count(),
+										'udpcount'			=>	$host->udp_port_count(),
+										'mac_addr'			=>	$host->mac_addr(),
+										'mac_vendor'		=>	$host->mac_vendor(),
+										'ipv6_addr'			=>	$host->ipv6_addr(),
+										'distance'			=>	$host->distance(),
+										'uptime_secs'		=>	$host->uptime_seconds(),
+										'uptime_lastboot'	=>	$host->uptime_lastboot(),
+									);
+									my $rtv = &insert_host_record(\%params);
+									print "insert_host_record::RTV: $rtv\n" if ($verbose);
+									$hid = &check_host_record($sid, $host->ipv4_addr(), $host->hostname());
+								} else {
+									# got a host id
+									print "Host ID exists: $hid\n";
+								}
+								### check for a sequencing record with thie scan id and 
+								### tcpsequence_class, tcpsequence_index, tcpsequence_values
+								if (&record_exists($hid, $sid, 'sequencing', $host->tcpsequence_class())) {
+									print "sequencing record exists for scan and host.  Skipping....\n" if ($verbose);
+								} else {
+									my %params = (
+										'hid'					=>	$hid,
+										'sid'					=>	$sid,
+										'tcpsequence_class'		=>	$host->tcpsequence_class(),
+										'tcpsequence_index'		=>	$host->tcpsequence_index(),
+										'tcpsequence_values'	=>	$host->tcpsequence_values(),
+										'ipidsequence_class'	=>	$host->ipidsequence_class(),
+										'ipidsequence_values'	=>	$host->ipidsequence_values(),
+										'tcptsequence_class'	=>	$host->tcptsequence_class(),
+										'tcptsequence_values'	=>	$host->tcptsequence_values(),
+									);
+									my $rtv = &insert_seq_record(\%params);
+									print "insert_seq_record::RTV: $rtv\n" if ($verbose);
+								}
+								### tcp open ports
+								my @pnums = $host->tcp_open_ports();
+								print join("|", @pnums)."\n" if (($verbose) && ($verbose > 2));
+								if (scalar(@pnums) > 0) {
+									foreach my $pnum ( sort @pnums ) {
+										print "PORT: $pnum\n" if (($verbose) and ($verbose > 2));
+										my $port_obj = $host->tcp_service($pnum);
+										print Dumper($port_obj) if (($verbose) and ($verbose > 1));
+										if (&check_port_record($hid, $sid, $pnum, 'open', $port_obj->proto())) {
+											print "Port record exists for scan and host.  Skipping....\n" if ($verbose);
+										} else {
+											my %params = (
+												'hid'				=>	$hid,
+												'sid'				=>	$sid,
+												'port_num'			=>	$pnum,
+												''					=>	'',				### This was in the ruby version.  Not sure why or if it's needed here.
+												'state'				=>	'open',			# we're only querying the host obj for open ports
+												'service_name'		=>	$port_obj->name(),
+												'service_tunnel'	=>	$port_obj->tunnel(),
+												'product'			=>	$port_obj->product(),
+												'version'			=>	$port_obj->version(),
+												'extra'				=>	$port_obj->extrainfo(),
+												'confidence'		=>	$port_obj->confidence(),
+												'method'			=>	$port_obj->method(),
+												'protocol'			=>	$port_obj->proto(),
+												'owner'				=>	$port_obj->owner(),
+												'rpcnum'			=>	$port_obj->rpcnum(),
+												'fingerprint'		=>	$port_obj->fingerprint(),
+											);
+											my $rtv = &insert_ports_record(\%params);
+											print "insert_ports_record::RTV: $rtv\n" if ($verbose);
+										}
+									}
+								} else {
+									print "TCP open port count is zero 0.\n" if (($verbose) and ($verbose > 1));
+								}
+								### udp open ports
+								@pnums = $host->udp_open_ports();
+								if (scalar(@pnums) > 0) {
+									print "Found open UDP ports in nmap data.\n";
+								}
+								### os records
+								my $os = $host->os_sig();
+								print Dumper($os) if (($verbose) and ($verbose > 2));
+								no warnings;
+								if (&record_exists($sid, $hid, 'os', $os->name())) {
+									print "OS record for host and scan already exists.  Skipping....\n" if ($verbose);
+								} else {
+									my %params = (
+										'hid'				=>	$hid,
+										'sid'				=>	$sid,
+										'os_name'			=>	$os->name(),
+										'os_family'			=>	$os->osfamily(),
+										'os_gen'			=>	$os->osgen(),
+										'os_type'			=>	$os->type(),
+										'os_vendor'			=>	$os->vendor(),
+										'class_accuracy'	=>	$os->class_accuracy(),
+									);
+									my $rtv = &insert_os_record(\%params);
+									print "insert_os_record::RTV: $rtv\n" if ($verbose);
+								}
+								use warnings;
+							}	# end foreach my $host...
+						}	#end else (scalar(@nmap_hosts)
+					}	# end when (sqlite)
+				}	# end given($dbtype)
 			### csv
 			} else {	# output CSV format
 				# (default output to csv)
@@ -428,10 +588,17 @@ EoS
 sub create_table {
 	# database connection paramters should be accessible from here!
 	my $table_name = shift;
-	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	my $dsn;
+	given ($dbtype) {
+		when ('mysql')	{ $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport"; }
+		when ('sqlite')	{ $dsn = "DBI:SQLite:dbname=$dbname"; }
+		when ('mssql')	{ $dsn = "TBD"; }
+	}
 	my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
-	my $rtv = $dbh->do($table_sql{$table_name}) or die $DBI::stderr;
-	$rtv = $dbh->do("ALTER TABLE $table_name AUTO_INCREMENT = 1;") or die $DBI::stderr;
+	my $rtv = $dbh->do($table_sql{$dbtype}{$table_name}) or die $DBI::stderr;
+	given ($dbtype) {
+		when ('mysql')	{ $rtv = $dbh->do("ALTER TABLE $table_name AUTO_INCREMENT = 1;") or die $DBI::stderr; }
+	}
 	$dbh->disconnect() or die $DBI::stderr;
 	print "create_table::RTV: $rtv\n" if ($verbose);
 	return $rtv;
@@ -439,9 +606,28 @@ sub create_table {
 
 sub insert_nmap_record {
 	my $data_ref = shift;
-	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	my $dsn;
+	given ($dbtype) {
+		when ('mysql')	{ $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport"; }
+		when ('sqlite')	{ $dsn = "DBI:SQLite:dbname=$dbname"; }
+		when ('mssql')	{ $dsn = "TBD"; }
+	}
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
-	my $rtv = $dbh->do("INSERT INTO nmap (version,xmlversion,args,types,starttime,startstr,endtime,endstr,numservices) VALUES ('$data_ref->{'version'}','$data_ref->{'xmlversion'}','$data_ref->{'args'}', '$data_ref->{'types'}', FROM_UNIXTIME($data_ref->{'starttime'}), '$data_ref->{'startstr'}', FROM_UNIXTIME($data_ref->{'endtime'}), '$data_ref->{'endstr'}', '$data_ref->{'numservices'}')");
+	my $rtv = 0;
+	given ($dbtype) {
+		when ('mysql') { 
+			$rtv = $dbh->do("INSERT INTO nmap (version,xmlversion,args,types,starttime,startstr,endtime,endstr,numservices) 
+							VALUES ('$data_ref->{'version'}','$data_ref->{'xmlversion'}','$data_ref->{'args'}', 
+							'$data_ref->{'types'}', FROM_UNIXTIME($data_ref->{'starttime'}), '$data_ref->{'startstr'}', 
+							FROM_UNIXTIME($data_ref->{'endtime'}), '$data_ref->{'endstr'}', '$data_ref->{'numservices'}')"); 
+		}
+		when ('sqlite') {
+			$rtv = $dbh->do("INSERT INTO nmap (version,xmlversion,args,types,starttime,startstr,endtime,endstr,numservices) 
+							VALUES ('$data_ref->{'version'}','$data_ref->{'xmlversion'}','$data_ref->{'args'}', 
+							'$data_ref->{'types'}', '$data_ref->{'starttime'}', '$data_ref->{'startstr'}', 
+							$data_ref->{'endtime'}, '$data_ref->{'endstr'}', '$data_ref->{'numservices'}')"); 
+		}
+	}
 	print "insert_nmap_record::RTV: $rtv\n" if ($verbose);
 	return $rtv;
 }
@@ -457,7 +643,12 @@ sub insert_host_record {
 			}
 		}
 	}
-	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	my $dsn;
+	given ($dbtype) {
+		when ('mysql')	{ $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport"; }
+		when ('sqlite')	{ $dsn = "DBI:SQLite:dbname=$dbname"; }
+		when ('mssql')	{ $dsn = "TBD"; }
+	}
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
     print Dumper($data_ref) if (($verbose) and ($verbose > 2));
     no warnings;
@@ -471,29 +662,60 @@ sub insert_host_record {
 
 sub insert_seq_record {
 	my $data_ref = shift;
-	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	my $dsn;
+	given ($dbtype) {
+		when ('mysql')	{ $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport"; }
+		when ('sqlite')	{ $dsn = "DBI:SQLite:dbname=$dbname"; }
+		when ('mssql')	{ $dsn = "TBD"; }
+	}
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
     no warnings;
-	my $rtv = $dbh->do("INSERT INTO sequencing (hid,sid,tcpclass,tcpindex,tcpvalues,ipclass,ipvalues,tcptclass,tcptvalues) VALUES ('$data_ref->{'hid'}', '$data_ref->{'sid'}', '$data_ref->{'tcpsequence_class'}', '$data_ref->{'tcpsequence_index'}', '$data_ref->{'tcpsequence_values'}', '$data_ref->{'ipidsequence_class'}', '$data_ref->{'ipidsequence_values'}', '$data_ref->{'tcptsequence_class'}', '$data_ref->{'tcptsequence_values'}')");
+	my $rtv = $dbh->do("INSERT INTO sequencing (hid,sid,tcpclass,tcpindex,tcpvalues,ipidclass,ipidvalues,tcptclass,tcptvalues) VALUES ('$data_ref->{'hid'}', '$data_ref->{'sid'}', '$data_ref->{'tcpsequence_class'}', '$data_ref->{'tcpsequence_index'}', '$data_ref->{'tcpsequence_values'}', '$data_ref->{'ipidsequence_class'}', '$data_ref->{'ipidsequence_values'}', '$data_ref->{'tcptsequence_class'}', '$data_ref->{'tcptsequence_values'}')");
 	use warnings;
-	#print "insert_seq_record::RTV: $rtv\n" if ($verbose);
 	return $rtv;
 }
 
 sub insert_ports_record {
 	my $data_ref = shift;
-	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	my $dsn;
+	given ($dbtype) {
+		when ('mysql')	{ $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport"; }
+		when ('sqlite')	{ $dsn = "DBI:SQLite:dbname=$dbname"; }
+		when ('mssql')	{ $dsn = "TBD"; }
+	}
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
     no warnings;
-	my $rtv = $dbh->do("INSERT INTO ports (hid,sid,port,type,state,name,tunnel,product,version,extra,confidence,method,proto,owner,rpcnum,fingerprint) VALUES ('$data_ref->{'hid'}','$data_ref->{'sid'}','$data_ref->{'port_num'}','$data_ref->{'type'}','$data_ref->{'state'}','$data_ref->{'service_name'}','$data_ref->{'service_tunnel'}','$data_ref->{'product'}','$data_ref->{'version'}','$data_ref->{'extra'}','$data_ref->{'confidence'}','$data_ref->{'method'}','$data_ref->{'proto'}','$data_ref->{'owner'}','$data_ref->{'rpcnum'}','".quotemeta($data_ref->{'fingerprint'})."')");
+    #print Dumper($data_ref);
+	my $rtv = 0;
+	given ($dbtype) { 
+		when ('mysql') {
+			$rtv = $dbh->do("INSERT INTO ports (hid,sid,port,type,state,name,tunnel,product,version,extra,confidence,method,proto,owner,rpcnum,fingerprint) 
+							VALUES ('$data_ref->{'hid'}','$data_ref->{'sid'}','$data_ref->{'port_num'}','$data_ref->{'type'}','$data_ref->{'state'}',
+							'$data_ref->{'service_name'}','$data_ref->{'service_tunnel'}','$data_ref->{'product'}','$data_ref->{'version'}','$data_ref->{'extra'}',
+							'$data_ref->{'confidence'}','$data_ref->{'method'}','$data_ref->{'proto'}','$data_ref->{'owner'}','$data_ref->{'rpcnum'}',
+							'".quotemeta($data_ref->{'fingerprint'})."')");
+		}
+		when ('sqlite') {
+			$data_ref->{'fingerprint'} =~ s/'/''/g;
+			$rtv = $dbh->do("INSERT INTO ports (hid,sid,port,type,state,name,tunnel,product,version,extra,confidence,method,proto,owner,rpcnum,fingerprint) 
+							VALUES ('$data_ref->{'hid'}','$data_ref->{'sid'}','$data_ref->{'port_num'}','$data_ref->{'type'}','$data_ref->{'state'}',
+							'$data_ref->{'service_name'}','$data_ref->{'service_tunnel'}','$data_ref->{'product'}','$data_ref->{'version'}','$data_ref->{'extra'}',
+							'$data_ref->{'confidence'}','$data_ref->{'method'}','$data_ref->{'proto'}','$data_ref->{'owner'}','$data_ref->{'rpcnum'}',
+							'$data_ref->{'fingerprint'}')");
+		}
+	}
 	use warnings;
-	#print "insert_ports_record::RTV: $rtv\n" if ($verbose);
 	return $rtv;
 }
 
 sub insert_os_record {
 	my $data_ref = shift;
-	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	my $dsn;
+	given ($dbtype) {
+		when ('mysql')	{ $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport"; }
+		when ('sqlite')	{ $dsn = "DBI:SQLite:dbname=$dbname"; }
+		when ('mssql')	{ $dsn = "TBD"; }
+	}
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
     no warnings;
 	my $rtv = $dbh->do("INSERT INTO os (hid,sid,name,family,generation,type,vendor,accuracy) VALUES ('$data_ref->{'hid'}', '$data_ref->{'sid'}', '$data_ref->{'os_name'}', '$data_ref->{'os_family'}', '$data_ref->{'os_gen'}', '$data_ref->{'os_type'}', '$data_ref->{'os_vendor'}', '$data_ref->{'class_accuracy'}')");
@@ -507,7 +729,12 @@ sub check_scan_record {
 	my $startstr = shift;
 	my $endstr = shift;
 	my $retval = 0;
-	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	my $dsn;
+	given ($dbtype) {
+		when ('mysql')	{ $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport"; }
+		when ('sqlite')	{ $dsn = "DBI:SQLite:dbname=$dbname"; }
+		when ('mssql')	{ $dsn = "TBD"; }
+	}
 	my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
 	my $sql = "SELECT sid FROM nmap WHERE args='$args_str' AND startstr='$startstr' AND endstr='$endstr'";
 	print "SQL: $sql\n" if ($verbose);
@@ -527,7 +754,12 @@ sub check_host_record {
 	my $ip4 = shift;
 	my $hostname = shift;
 	my $retval = 0;
-	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	my $dsn;
+	given ($dbtype) {
+		when ('mysql')	{ $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport"; }
+		when ('sqlite')	{ $dsn = "DBI:SQLite:dbname=$dbname"; }
+		when ('mssql')	{ $dsn = "TBD"; }
+	}
 	my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
 	my $sth = $dbh->prepare("SELECT hid FROM hosts WHERE sid='$sid' and ip4='$ip4' AND hostname='$hostname'") or die $DBI::stderr;
 	my $rtv = $sth->execute() or die $DBI::stderr;
@@ -547,7 +779,12 @@ sub check_port_record {
 	my $portstate = shift;
 	my $portproto = shift;
 	my $retval = 0;
-	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	my $dsn;
+	given ($dbtype) {
+		when ('mysql')	{ $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport"; }
+		when ('sqlite')	{ $dsn = "DBI:SQLite:dbname=$dbname"; }
+		when ('mssql')	{ $dsn = "TBD"; }
+	}
 	my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
 	no warnings;
 	my $sth = $dbh->prepare("SELECT hid FROM ports WHERE hid='$hid' AND sid='$sid' AND port='$portnum' AND state='$portstate' AND proto='$portproto';");
@@ -574,7 +811,13 @@ sub record_exists {
 		'os'			=>	"SELECT hid FROM os WHERE hid='$hid' AND sid='$sid' AND name='$extra'",
 	);
 	use warnings;
-	my $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport";
+	no if $] >= 5.017011, warnings => 'experimental::smartmatch';
+	my $dsn;
+	given ($dbtype) {
+		when ('mysql')	{ $dsn = "DBI:mysql:database=$dbname:host=$dbhost:port=$dbport"; }
+		when ('sqlite')	{ $dsn = "DBI:SQLite:dbname=$dbname"; }
+		when ('mssql')	{ $dsn = "TBD"; }
+	}
 	my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
 	my $sth = $dbh->prepare($sql{$rec_type}) or die $DBI::stderr;
 	$sth->execute() or die $DBI::stderr;
