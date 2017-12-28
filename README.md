@@ -3,8 +3,8 @@ nmap2db script(s) in perl
 
 ## Prerequisites:
 This script requires some perl modules that likely are not distributed with modern linuxes:
-Nmap::Parser
-Excel::Writer::XLSX
+* Nmap::Parser
+* Excel::Writer::XLSX
 
 Installation methods for these will vary based on operating system.
 
