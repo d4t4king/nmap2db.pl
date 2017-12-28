@@ -1,6 +1,15 @@
 # nmap2db.pl
 nmap2db script(s) in perl
 
+## Prerequisites:
+=====
+This script requires some perl modules that likely are not distributed with modern linuxes:
+Nmap::Parser
+Excel::Writer::XLSX
+
+Installation methods for these will vary based on operating system.
+=====
+
 ### CSV
 This is the default output format.
 This is currently working.  Please submit any bugs or feature requests via Github Issues for this project.
