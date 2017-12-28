@@ -16,16 +16,16 @@ my ($input, $output, $verbose, $help, $quiet, $excel, $up, $masscan, $database);
 my ($dbtype, $dbname, $dbhost, $dbport, $dbuser, $dbpass);
 GetOptions(
 	'h|help'		=>	\$help,
-	'v|verbose+'	=>	\$verbose,
+	'v|verbose+'		=>	\$verbose,
 	'q|quiet'		=>	\$quiet,
 	'i|input=s'		=>	\$input,
-	'o|output=s'	=>	\$output,
+	'o|output=s'		=>	\$output,
 	'e|excel'		=>	\$excel,
 	'u|up'			=>	\$up,
 	'm|masscan'		=>	\$masscan,
 	't|type=s'		=>	\$dbtype,
-	's|server=s'	=>	\$dbhost,
-	'd|database=s'	=>	\$dbname,
+	's|server=s'		=>	\$dbhost,
+	'd|database=s'		=>	\$dbname,
 	'P|port=s'		=>	\$dbport,
 	'u|user=s'		=>	\$dbuser,
 	'p|pass=s'		=>	\$dbpass,
@@ -571,7 +571,7 @@ Where:
 -e|--excel			Create a Microsoft Excel 2010 and later compatible Excel file.
 -i|--input			Specify the full path to the input file.
 -o|--output			Specify the full path to the output file.
--t|--type			Specify the database type.  Currently only accepts 'mysql' or 'MSSQL'.
+-t|--type			Specify the database type.  Currently only accepts te', 'mysql' or 'MSSQL'.
 -s|--server			Specify the database server.
 -p|--port			Specify the port for the database server.  Defaults to 3306.
 -d|--database			Specify the name for the database.  Defaults to 'nmap_data'.
