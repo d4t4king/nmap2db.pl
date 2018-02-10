@@ -372,6 +372,10 @@ if ($masscan) {
 						}
 						my $rtv = $dbh->do("CREATE VIEW vw_ports_on_host AS SELECT h.ip4,h.hostname,h.status,p.port,p.name,p.product,p.version,p.method,p.confidence,p.extra FROM hosts h INNER JOIN ports p ON h.hid=p.hid;");
 						print "view_creator_RTV: $rtv\n" if ($verbose);
+						$rtv = $dbh->do("CREATE VIEW vw_hosts_on_port AS SELECT h.ip4 AS ipv4_addr,h.hostname AS hostname, h.status AS host_status, h.mac AS mac_addr, h.vendor AS mac_vendor, h.ip6 AS ipv6_addr, h.distance AS hop_distance, h.uptime AS uptime, h.upstr as upstring, p.port AS port_num, p.name AS svc_name, p.product AS product, p.version AS svc_version FROM hosts h INNER JOIN p ON h.hid=p.hid;");
+                        print "view_creator_RTV: $rtv" if ($verbose);
+						$rtv = $dbh->do("CREATE VIEW vw_host_os AS SELECT h.ip4 AS ipv4_addr, h.hostname AS hostname, o.name AS osname, o.family AS osfamily, o.generation AS osgen FROM os o INNER JOIN hosts h ON o.hid=h.hid;");
+                        print "view_creator_RTV: $rtv" if ($verbose);
 						$dbh->disconnect();
 						### process the nmap data
 						# check if a session record already exists
