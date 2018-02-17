@@ -681,7 +681,7 @@ sub insert_host_record {
     my $dbh = DBI->connect($dsn, $dbuser, $dbpass) or die $DBI::stderr;
     print Dumper($data_ref) if (($verbose) and ($verbose > 2));
     no warnings;
-    my $sql = "INSERT INTO hosts (sid,ip4,ip4num,hostname,status,tcpcount,udpcount,mac,vendor,ip6,distance,uptime,upstr) VALUES ('$data_ref->{'sid'}','$data_ref->{'ip4'}','unpack('N', inet_aton($data_ref->{'ip4'}))','$data_ref->{'hostname'}','$data_ref->{'status'}','$data_ref->{'tcpcount'}','$data_ref->{'udpcount'}','$data_ref->{'mac'}','$data_ref->{'vendor'}','$data_ref->{'ip6'}','$data_ref->{'distance'}','$data_ref->{'uptime'}','$data_ref->{'upstr'}')";
+    my $sql = "INSERT INTO hosts (sid,ip4,ip4num,hostname,status,tcpcount,udpcount,mac,vendor,ip6,distance,uptime,upstr) VALUES ('$data_ref->{'sid'}','$data_ref->{'ip4'}','".unpack('N', inet_aton($data_ref->{'ip4'}))."','$data_ref->{'hostname'}','$data_ref->{'status'}','$data_ref->{'tcpcount'}','$data_ref->{'udpcount'}','$data_ref->{'mac'}','$data_ref->{'vendor'}','$data_ref->{'ip6'}','$data_ref->{'distance'}','$data_ref->{'uptime'}','$data_ref->{'upstr'}')";
     use warnings;
     print "insert_host_record::SQL: $sql\n" if ($verbose);
 	my $rtv = $dbh->do("$sql");
